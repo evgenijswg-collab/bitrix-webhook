@@ -21,26 +21,24 @@ def handler():
             field_name = key.split('[')[-1].replace(']', '')
             fields[field_name] = value
     
-    last_debug['raw_keys'] = list(data.keys())
     last_debug['fields'] = fields
     
-    doc_id = fields.get('ID', '')
-    deal_id = fields.get(DEAL_ID_FIELD, '')
+    doc_entity_id = fields.get('ENTITY_ID', '')  # Это ID накладной
+    deal_id = fields.get(DEAL_ID_FIELD, '')       # Это ID сделки из кастомного поля
     
-    last_debug['doc_id'] = doc_id
+    last_debug['doc_entity_id'] = doc_entity_id
     last_debug['deal_id'] = deal_id
     
     if not deal_id:
-        return jsonify({"result": True, "msg": "deal_id not found", "fields_keys": list(fields.keys())}), 200
+        return jsonify({"result": True, "msg": "deal_id not found"}), 200
     
     # Вписываем ID накладной в поле сделки
-    payload = {"id": int(deal_id), "fields": {DEAL_INVOICE_FIELD: doc_id}}
+    payload = {"id": int(deal_id), "fields": {DEAL_INVOICE_FIELD: doc_entity_id}}
     resp = requests.post(f"{WEBHOOK_URL}crm.deal.update.json", json=payload, timeout=10)
     
     last_debug['update_status'] = resp.status_code
-    last_debug['update_response'] = resp.json() if resp.ok else resp.text
     
-    return jsonify({"result": True, "deal": deal_id, "doc_id": doc_id}), 200
+    return jsonify({"result": True, "deal": deal_id, "doc_entity_id": doc_entity_id}), 200
 
 @app.route('/debug', methods=['GET'])
 def debug():
