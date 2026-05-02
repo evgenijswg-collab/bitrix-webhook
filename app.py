@@ -11,38 +11,41 @@ DOC_DEAL_LINK_FIELD = "UF_CAT_STORE_DOCUMENT_A_1777549444"
 def bitrix_handler():
     try:
         data = request.get_json(force=True, silent=True)
-        
-        # Вытаскиваем ID документа и данные
         doc_data = data.get('data', {})
         
-        # Пробуем разные варианты полей
-        doc_number = doc_data.get('NUMBER') or doc_data.get('TITLE') or doc_data.get('ID')
-        deal_id = doc_data.get(DOC_DEAL_LINK_FIELD)
+        # Пробуем найти номер
+        doc_number = doc_data.get('NUMBER') or doc_data.get('TITLE') or str(doc_data.get('ID', ''))
         
-        # Если UF поле пустое — пробуем найти в FIELDS
+        # Пробуем найти ID сделки
+        deal_id = doc_data.get(DOC_DEAL_LINK_FIELD)
         if not deal_id and 'FIELDS' in doc_data:
             deal_id = doc_data['FIELDS'].get(DOC_DEAL_LINK_FIELD)
-        
-        # Если всё ещё нет — пробуем найти любое поле с "DEAL" или "UF_CRM"
         if not deal_id:
-            for key in doc_data.keys():
+            for key, value in doc_data.items():
                 if 'DEAL' in key.upper() or 'UF_CRM' in key:
-                    deal_id = doc_data.get(key)
-                    if deal_id:
-                        break
+                    deal_id = value
+                    break
+        
+        # Всегда пишем комментарий для отладки
+        comment_text = f"Webhook debug:\nНомер: {doc_number}\nID сделки: {deal_id}\nПоля: {list(doc_data.keys())}"
+        
+        if deal_id:
+            requests.post(f"{WEBHOOK_URL}crm.timeline.comment.add.json", json={
+                "fields": {
+                    "ENTITY_ID": deal_id,
+                    "ENTITY_TYPE": "deal",
+                    "COMMENT": comment_text
+                }
+            }, timeout=10)
         
         if not (doc_number and deal_id):
-            return jsonify({
-                "status": "debug",
-                "doc_number_found": doc_number,
-                "deal_id_found": deal_id,
-                "all_fields": list(doc_data.keys())
-            }), 200
-            
+            return jsonify({"status": "debug", "comment_sent": bool(deal_id)}), 200
+        
+        # Обновляем сделку
         payload = {"id": deal_id, "fields": {DEAL_INVOICE_FIELD: doc_number}}
         resp = requests.post(f"{WEBHOOK_URL}crm.deal.update.json", json=payload, timeout=10)
         
-        return jsonify({"status": "ok", "deal_updated": deal_id}), 200
+        return jsonify({"status": "ok", "deal": deal_id, "number": doc_number}), 200
         
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 200
