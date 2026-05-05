@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 import requests
 import time
+import threading
 
 app = Flask(__name__)
 
@@ -15,6 +16,14 @@ CONTRACT_NUMBER_FIELD = "UF_CRM_1777452882147"
 BP_TEMPLATE_ID = 282
 
 last_contract_debug = {}
+recent_deals = set()
+recent_lock = threading.Lock()
+
+
+def clear_deal(did):
+    time.sleep(60)
+    with recent_lock:
+        recent_deals.discard(did)
 
 
 # ============================================================
@@ -88,7 +97,7 @@ def warehouse_handler():
 # ============================================================
 @app.route('/contract', methods=['POST'])
 def contract_handler():
-    global last_contract_debug
+    global last_contract_debug, recent_deals
     last_contract_debug = {}
 
     data = request.form.to_dict()
@@ -107,6 +116,13 @@ def contract_handler():
 
     if not deal_id:
         return jsonify({"result": True, "msg": "no deal_id"}), 200
+
+    # Защита от повторов
+    with recent_lock:
+        if deal_id in recent_deals:
+            return jsonify({"result": True, "msg": "already processed"}), 200
+        recent_deals.add(deal_id)
+    threading.Thread(target=clear_deal, args=(deal_id,), daemon=True).start()
 
     # Ждём номер договора И завершения всех БП
     contract_number = None
