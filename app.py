@@ -7,17 +7,17 @@ app = Flask(__name__)
 WEBHOOK_URL = "https://mariomicci.bitrix24.ru/rest/14/8emi78wk1nant8ni/"
 BITRIX_DOMAIN = "mariomicci.bitrix24.ru"
 
-# Поля для ссылок (склад)
 DEAL_LINK_FIELD = "UF_CRM_1777825383755"
 SMART_LINK_FIELD = "ufCrm10_1777827987160"
 SMART_ENTITY_TYPE_ID = 1046
 
-# Поля для договора
-CONTRACT_NUMBER_FIELD = "UF_CRM_1777452882147"  # Номер договора в сделке
-BP_TEMPLATE_ID = 282                            # ID шаблона БП «Создание счёта»
+CONTRACT_NUMBER_FIELD = "UF_CRM_1777452882147"
+BP_TEMPLATE_ID = 282
+
+last_contract_debug = {}
 
 # ============================================================
-# Маршрут 1: Складские документы (приход / перемещение)
+# Маршрут 1: Складские документы
 # ============================================================
 @app.route('/', methods=['POST'])
 def warehouse_handler():
@@ -52,10 +52,10 @@ def warehouse_handler():
 
     doc_link = f"https://{BITRIX_DOMAIN}/shop/documents/details/{doc_entity_id}/"
 
-    if doc_type == "A":  # Приход → обычная сделка
+    if doc_type == "A":
         update_url = f"{WEBHOOK_URL}crm.deal.update.json"
         payload = {"id": int(parent_deal_id), "fields": {DEAL_LINK_FIELD: doc_link}}
-    else:  # Перемещение → смарт-процесс
+    else:
         search_resp = requests.post(
             f"{WEBHOOK_URL}crm.item.list.json",
             json={
@@ -85,8 +85,6 @@ def warehouse_handler():
 # ============================================================
 # Маршрут 2: Договор → ожидание номера → создание счёта
 # ============================================================
-last_contract_debug = {}
-
 @app.route('/contract', methods=['POST'])
 def contract_handler():
     global last_contract_debug
@@ -109,7 +107,6 @@ def contract_handler():
     if not deal_id:
         return jsonify({"result": True, "msg": "no deal_id"}), 200
 
-    # Ждём появления номера договора
     contract_number = None
     attempts_log = []
     for attempt in range(15):
@@ -122,7 +119,7 @@ def contract_handler():
         ).json()
 
         contract_number = resp.get('result', {}).get(CONTRACT_NUMBER_FIELD, '')
-        attempts_log.append({"attempt": attempt + 1, "contract_number": contract_number})
+        attempts_log.append({"attempt": attempt + 1, "number": contract_number})
         
         if contract_number:
             break
@@ -133,7 +130,6 @@ def contract_handler():
     if not contract_number:
         return jsonify({"result": True, "msg": "contract number still empty"}), 200
 
-    # Запускаем БП «Создание счёта»
     bp_resp = requests.post(
         f"{WEBHOOK_URL}bizproc.workflow.start.json",
         json={
@@ -154,3 +150,7 @@ def contract_handler():
 @app.route('/contract-debug', methods=['GET'])
 def contract_debug():
     return jsonify(last_contract_debug)
+
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=10000)
