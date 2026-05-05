@@ -16,8 +16,9 @@ BP_TEMPLATE_ID = 282
 
 last_contract_debug = {}
 
+
 # ============================================================
-# Маршрут 1: Складские документы
+# Маршрут 1: Складские документы (приход / перемещение)
 # ============================================================
 @app.route('/', methods=['POST'])
 def warehouse_handler():
@@ -83,7 +84,7 @@ def warehouse_handler():
 
 
 # ============================================================
-# Маршрут 2: Договор → ожидание номера → создание счёта
+# Маршрут 2: Договор → ждём завершения БП → создание счёта
 # ============================================================
 @app.route('/contract', methods=['POST'])
 def contract_handler():
@@ -100,28 +101,47 @@ def contract_handler():
             fields[field_name] = value
 
     last_contract_debug['fields'] = fields
-    
+
     deal_id = fields.get('ENTITY_ID', '')
     last_contract_debug['deal_id'] = deal_id
 
     if not deal_id:
         return jsonify({"result": True, "msg": "no deal_id"}), 200
 
+    # Ждём номер договора И завершения всех БП
     contract_number = None
     attempts_log = []
-    for attempt in range(15):
+    for attempt in range(30):
         time.sleep(2)
 
-        resp = requests.post(
+        deal_resp = requests.post(
             f"{WEBHOOK_URL}crm.deal.get.json",
             json={"id": int(deal_id)},
             timeout=10
         ).json()
+        contract_number = deal_resp.get('result', {}).get(CONTRACT_NUMBER_FIELD, '')
 
-        contract_number = resp.get('result', {}).get(CONTRACT_NUMBER_FIELD, '')
-        attempts_log.append({"attempt": attempt + 1, "number": contract_number})
-        
-        if contract_number:
+        bp_resp = requests.post(
+            f"{WEBHOOK_URL}bizproc.workflow.instances.json",
+            json={
+                "SELECT": ["ID", "STATE"],
+                "FILTER": {
+                    "DOCUMENT_ID": f"crm_CCrmDocumentDeal_{deal_id}",
+                    "STATE": "running"
+                }
+            },
+            timeout=10
+        ).json()
+
+        running_count = len(bp_resp.get('result', []))
+
+        attempts_log.append({
+            "attempt": attempt + 1,
+            "contract_number": contract_number,
+            "running_bp": running_count
+        })
+
+        if contract_number and running_count == 0:
             break
 
     last_contract_debug['attempts'] = attempts_log
@@ -130,6 +150,7 @@ def contract_handler():
     if not contract_number:
         return jsonify({"result": True, "msg": "contract number still empty"}), 200
 
+    # Запускаем БП «Создание счёта»
     bp_resp = requests.post(
         f"{WEBHOOK_URL}bizproc.workflow.start.json",
         json={
