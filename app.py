@@ -85,24 +85,33 @@ def warehouse_handler():
 # ============================================================
 # Маршрут 2: Договор → ожидание номера → создание счёта
 # ============================================================
+last_contract_debug = {}
+
 @app.route('/contract', methods=['POST'])
 def contract_handler():
-    data = request.form.to_dict()
+    global last_contract_debug
+    last_contract_debug = {}
 
-    # Извлекаем ID сделки из данных вебхука
+    data = request.form.to_dict()
+    last_contract_debug['raw_keys'] = list(data.keys())
+
     fields = {}
     for key, value in data.items():
         if key.startswith('data[FIELDS]['):
             field_name = key.split('[')[-1].replace(']', '')
             fields[field_name] = value
 
-    # Для документа ENTITY_ID — это ID сделки
+    last_contract_debug['fields'] = fields
+    
     deal_id = fields.get('ENTITY_ID', '')
+    last_contract_debug['deal_id'] = deal_id
+
     if not deal_id:
         return jsonify({"result": True, "msg": "no deal_id"}), 200
 
-    # Ждём появления номера договора (до 15 попыток по 2 секунды)
+    # Ждём появления номера договора
     contract_number = None
+    attempts_log = []
     for attempt in range(15):
         time.sleep(2)
 
@@ -113,11 +122,16 @@ def contract_handler():
         ).json()
 
         contract_number = resp.get('result', {}).get(CONTRACT_NUMBER_FIELD, '')
+        attempts_log.append({"attempt": attempt + 1, "contract_number": contract_number})
+        
         if contract_number:
             break
 
+    last_contract_debug['attempts'] = attempts_log
+    last_contract_debug['final_contract_number'] = contract_number
+
     if not contract_number:
-        return jsonify({"result": True, "msg": "contract number still empty after 30 sec"}), 200
+        return jsonify({"result": True, "msg": "contract number still empty"}), 200
 
     # Запускаем БП «Создание счёта»
     bp_resp = requests.post(
@@ -132,13 +146,11 @@ def contract_handler():
         timeout=10
     ).json()
 
-    return jsonify({
-        "result": True,
-        "deal_id": deal_id,
-        "contract_number": contract_number,
-        "bp_started": bp_resp.get('result') is not None
-    }), 200
+    last_contract_debug['bp_response'] = bp_resp
+
+    return jsonify({"result": True, "bp_started": bp_resp.get('result') is not None}), 200
 
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+@app.route('/contract-debug', methods=['GET'])
+def contract_debug():
+    return jsonify(last_contract_debug)
