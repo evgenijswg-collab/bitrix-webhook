@@ -10,6 +10,7 @@ BITRIX_DOMAIN = "mariomicci.bitrix24.ru"
 
 DEAL_LINK_FIELD = "UF_CRM_1777825383755"
 SMART_LINK_FIELD = "ufCrm10_1777827987160"
+SMART_DATE_FIELD = "ufCrm10_1775722563672"          # Дата документа в смарт-процессе (только для прихода)
 SMART_ENTITY_TYPE_ID = 1046
 
 CONTRACT_NUMBER_FIELD = "UF_CRM_1777452882147"
@@ -45,7 +46,7 @@ def warehouse_handler():
 
     resp = requests.post(
         f"{WEBHOOK_URL}catalog.document.list.json",
-        json={"filter": {"id": int(doc_entity_id)}, "select": ["id", "docNumber", "docType"]},
+        json={"filter": {"id": int(doc_entity_id)}, "select": ["id", "docNumber", "docType", "dateDocument"]},
         timeout=10
     ).json()
 
@@ -56,16 +57,45 @@ def warehouse_handler():
     doc = documents[0]
     parent_deal_id = doc.get('docNumber', '')
     doc_type = doc.get('docType', '')
+    doc_date = doc.get('dateDocument', '')
 
     if not parent_deal_id:
         return jsonify({"result": True, "msg": "no deal_id"}), 200
 
     doc_link = f"https://{BITRIX_DOMAIN}/shop/documents/details/{doc_entity_id}/"
 
-    if doc_type == "A":
+    if doc_type == "A":  # Приход → обычная сделка + дата в смарт-процесс
+        # Ссылка в обычную сделку
         update_url = f"{WEBHOOK_URL}crm.deal.update.json"
         payload = {"id": int(parent_deal_id), "fields": {DEAL_LINK_FIELD: doc_link}}
-    else:
+        requests.post(update_url, json=payload, timeout=10)
+
+        # Дата в смарт-процесс
+        if doc_date:
+            smart_search = requests.post(
+                f"{WEBHOOK_URL}crm.item.list.json",
+                json={
+                    "entityTypeId": SMART_ENTITY_TYPE_ID,
+                    "filter": {"xmlId": parent_deal_id},
+                    "select": ["id"]
+                },
+                timeout=10
+            ).json()
+
+            smart_items = smart_search.get('result', {}).get('items', [])
+            if smart_items:
+                smart_id = smart_items[0]['id']
+                requests.post(
+                    f"{WEBHOOK_URL}crm.item.update.json",
+                    json={
+                        "entityTypeId": SMART_ENTITY_TYPE_ID,
+                        "id": smart_id,
+                        "fields": {SMART_DATE_FIELD: doc_date}
+                    },
+                    timeout=10
+                )
+
+    else:  # Перемещение → смарт-процесс (ссылка, без даты)
         search_resp = requests.post(
             f"{WEBHOOK_URL}crm.item.list.json",
             json={
@@ -87,9 +117,9 @@ def warehouse_handler():
             "id": smart_item_id,
             "fields": {SMART_LINK_FIELD: doc_link}
         }
+        requests.post(update_url, json=payload, timeout=10)
 
-    requests.post(update_url, json=payload, timeout=10)
-    return jsonify({"result": True, "doc_type": doc_type, "doc_link": doc_link}), 200
+    return jsonify({"result": True, "doc_type": doc_type, "doc_link": doc_link, "doc_date": doc_date}), 200
 
 
 # ============================================================
@@ -117,14 +147,12 @@ def contract_handler():
     if not deal_id:
         return jsonify({"result": True, "msg": "no deal_id"}), 200
 
-    # Защита от повторов
     with recent_lock:
         if deal_id in recent_deals:
             return jsonify({"result": True, "msg": "already processed"}), 200
         recent_deals.add(deal_id)
     threading.Thread(target=clear_deal, args=(deal_id,), daemon=True).start()
 
-    # Ждём номер договора И завершения всех БП
     contract_number = None
     attempts_log = []
     for attempt in range(30):
@@ -166,7 +194,6 @@ def contract_handler():
     if not contract_number:
         return jsonify({"result": True, "msg": "contract number still empty"}), 200
 
-    # Запускаем БП «Создание счёта»
     bp_resp = requests.post(
         f"{WEBHOOK_URL}bizproc.workflow.start.json",
         json={
