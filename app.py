@@ -397,6 +397,30 @@ def run_daily_audit():
                         msgs.append(f"   • {name}: {data['overdue']} просрочено")
         except Exception as e:
             msgs.append(f"\n📋 Задачи: ошибка — {str(e)[:80]}")
+
+                # --- ИИ-анализ ---
+        try:
+            raw_text = "\n".join(msgs)
+            ai_resp = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"},
+                json={
+                    "model": "google/gemma-4-31b-it:free",
+                    "messages": [
+                        {"role": "system", "content": "Ты — корпоративный аналитик. Посмотри на показатели CRM за сегодня и напиши краткий вывод на русском языке (3-5 предложений): что хуже всего, кто перегружен, на что директору обратить внимание. Будь конкретным: называй имена и цифры."},
+                        {"role": "user", "content": raw_text}
+                    ],
+                    "max_tokens": 600,
+                    "temperature": 0.5
+                },
+                timeout=120
+            ).json()
+            
+            ai_report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', '')
+            if ai_report:
+                msgs.append(f"\n\n🤖 <b>Анализ ИИ:</b>\n{ai_report}")
+        except:
+            pass
         
         send_telegram("\n".join(msgs))
         
