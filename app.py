@@ -244,30 +244,47 @@ def daily_audit_route():
 
 def run_daily_audit():
     try:
-        send_telegram("🟢 Старт аудита через DeepSeek")
+        send_telegram("🟢 Старт аудита")
         
         tz = pytz.timezone(TIMEZONE)
         now = datetime.now(tz)
         
-        ai_resp = requests.post(
-            AI_API_URL,
-            headers={
-                "Authorization": f"Bearer {AI_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": AI_MODEL,
-                "messages": [
-                    {"role": "user", "content": "Скажи: тест пройден"}
-                ],
-                "max_tokens": 50
-            },
-            timeout=60
-        ).json()
+        # Пробуем до 5 попыток с разными моделями
+        models = [
+            "qwen/qwen3-next-80b-a3b-instruct:free",
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "google/gemma-4-31b-it:free"
+        ]
         
-        report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', 'Нет ответа')
+        report = None
+        for model in models:
+            try:
+                resp = requests.post(
+                    AI_API_URL,
+                    headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"},
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": "Say: ok"}],
+                        "max_tokens": 20
+                    },
+                    timeout=30
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
+                    if content:
+                        report = f"Модель {model}: {content}"
+                        break
+                else:
+                    send_telegram(f"⚠️ {model}: {resp.status_code}")
+            except:
+                pass
+            time.sleep(2)
         
-        send_telegram(f"📊 DeepSeek:\n\n{report}")
+        if report:
+            send_telegram(f"📊 {report}")
+        else:
+            send_telegram("❌ Все модели недоступны")
         
     except Exception as e:
         send_telegram(f"❌ Ошибка: {str(e)}")
