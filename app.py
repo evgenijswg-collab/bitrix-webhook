@@ -399,8 +399,8 @@ def run_daily_audit():
             msgs.append(f"\n📋 Задачи: ошибка — {str(e)[:80]}")
 
               
-              # --- ИИ-анализ ---
-             try:
+                      # --- ИИ-анализ ---
+        try:
             raw_text = "\n".join(msgs)
             
             models = [
@@ -427,7 +427,7 @@ def run_daily_audit():
                             timeout=30
                         ).json()
                         
-                        ai_report = ai_json.get('choices', [{}])[0].get('message', {}).get('content', '')
+                        ai_report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', '')
                         if ai_report:
                             break
                     except:
@@ -436,8 +436,7 @@ def run_daily_audit():
                 
                 if ai_report:
                     break
-                else:
-                    time.sleep(5)
+                time.sleep(5)
             
             if ai_report:
                 msgs.append(f"\n\n🤖 <b>ИИ:</b>\n{ai_report}")
