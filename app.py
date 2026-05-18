@@ -398,6 +398,58 @@ def run_daily_audit():
         except Exception as e:
             msgs.append(f"\n📋 Задачи: ошибка — {str(e)[:80]}")
 
+                # --- ОСТАТКИ ПО СКЛАДАМ ---
+        try:
+            # Получаем все остатки
+            store_resp = bitrix_api("catalog.storeproduct.list.json", {
+                "select": ["PRODUCT_ID", "STORE_ID", "AMOUNT"]
+            })
+            products = store_resp.get('result', {}).get('storeProducts', [])
+            
+            if products:
+                # Собираем уникальные ID товаров и складов
+                product_ids = set(p['productId'] for p in products if p.get('amount'))
+                store_ids = set(p['storeId'] for p in products if p.get('amount'))
+                
+                # Получаем названия товаров
+                product_names = {}
+                for pid in product_ids:
+                    try:
+                        p_resp = bitrix_api("catalog.product.get.json", {"id": int(pid)})
+                        product_names[str(pid)] = p_resp.get('result', {}).get('product', {}).get('name', f'Товар {pid}')
+                    except:
+                        product_names[str(pid)] = f'Товар {pid}'
+                
+                # Получаем названия складов
+                store_names = {}
+                try:
+                    s_resp = bitrix_api("catalog.store.list.json")
+                    for s in s_resp.get('result', {}).get('stores', []):
+                        store_names[str(s['id'])] = s.get('title', f'Склад {s["id"]}')
+                except:
+                    pass
+                
+                # Группируем: товар → склад → остаток
+                by_product = {}
+                for p in products:
+                    amt = p.get('amount')
+                    if not amt or float(amt) <= 0:
+                        continue
+                    pid = str(p['productId'])
+                    sid = str(p['storeId'])
+                    if pid not in by_product:
+                        by_product[pid] = {}
+                    by_product[pid][sid] = float(amt)
+                
+                if by_product:
+                    msgs.append(f"\n📦 <b>Остатки по складам:</b>")
+                    for pid, stores in sorted(by_product.items()):
+                        name = product_names.get(pid, f'Товар {pid}')
+                        total = sum(stores.values())
+                        details = ", ".join([f"{store_names.get(sid, sid)}: {amt:.1f}" for sid, amt in stores.items()])
+                        msgs.append(f"   • {name}: {total:.1f} ({details})")
+        except Exception as e:
+            msgs.append(f"\n📦 Остатки: ошибка — {str(e)[:80]}")
               
                       # --- ИИ-анализ ---
         try:
