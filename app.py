@@ -447,7 +447,7 @@ def run_daily_audit():
         except Exception as e:
             msgs.append(f"\n📦 Остатки: ошибка — {str(e)[:80]}")
 
-        def run_monthly_audit():
+def run_monthly_audit():
     import traceback
     try:
         tz = pytz.timezone(TIMEZONE)
