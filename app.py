@@ -243,97 +243,62 @@ def daily_audit_route():
 
 
 def run_daily_audit():
-    """Основная функция аудита за текущий день"""
     import traceback
     try:
+        send_telegram("1/5 Старт")
+        
         tz = pytz.timezone(TIMEZONE)
         now = datetime.now(tz)
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-
-        send_telegram("🟢 Собираю данные из Битрикс24...")
+        
+        send_telegram(f"2/5 Дата: {today_start}")
         
         logs = []
-
-        # --- 1. Сбор лидов ---
-        try:
-            leads_resp = bitrix_api("crm.lead.list.json", {
-                "filter": {">=DATE_MODIFY": today_start},
-                "select": ["ID", "TITLE", "STATUS_ID", "ASSIGNED_BY_ID", "CONTACT_ID", "COMPANY_ID"]
-            })
-            leads = leads_resp.get('result', [])
-            logs.append(f"=== ЛИДЫ ({len(leads)}) ===")
-            for lead in leads:
-                logs.append(f"[Лид #{lead['id']}] {lead['title']} | Контакт: {lead.get('contactId','нет')}")
-        except Exception as e:
-            logs.append(f"⚠️ Ошибка лидов: {e}")
-
-        # --- 2. Сбор сделок ---
+        
+        # Сбор сделок
         try:
             deals_resp = bitrix_api("crm.deal.list.json", {
                 "filter": {">=DATE_MODIFY": today_start},
-                "select": ["ID", "TITLE", "STAGE_ID", "OPPORTUNITY", "CONTACT_ID"]
+                "select": ["ID", "TITLE"]
             })
             deals = deals_resp.get('result', [])
-            logs.append(f"\n=== СДЕЛКИ ({len(deals)}) ===")
-            for deal in deals:
-                logs.append(f"[Сделка #{deal['id']}] {deal['title']} | Сумма: {deal.get('opportunity')} | Контакт: {deal.get('contactId','нет')}")
+            logs.append(f"Сделок: {len(deals)}")
+            send_telegram(f"3/5 Сделок: {len(deals)}")
         except Exception as e:
-            logs.append(f"⚠️ Ошибка сделок: {e}")
-
-        # --- 3. Сбор задач ---
+            send_telegram(f"Ошибка сделок: {e}")
+        
+        # Сбор задач
         try:
             tasks_resp = bitrix_api("tasks.task.list.json", {
                 "filter": {">=CHANGED_DATE": today_start},
-                "select": ["ID", "TITLE", "STATUS", "RESPONSIBLE_ID"]
+                "select": ["ID", "TITLE"]
             })
             tasks = tasks_resp.get('result', {}).get('tasks', [])
-            logs.append(f"\n=== ЗАДАЧИ ({len(tasks)}) ===")
-            for task in tasks[:10]:
-                task_id = task['id']
-                logs.append(f"[Задача #{task_id}] {task['title']} | Статус: {task['status']}")
-                try:
-                    comments_resp = bitrix_api("task.commentitem.getlist.json", {"TASKID": task_id})
-                    comments = comments_resp.get('result', [])
-                    for c in comments[:5]:
-                        if isinstance(c, dict):
-                            logs.append(f"  ↳ {c.get('POST_MESSAGE','')[:150]}")
-                except:
-                    pass
+            logs.append(f"Задач: {len(tasks)}")
+            send_telegram(f"4/5 Задач: {len(tasks)}")
         except Exception as e:
-            logs.append(f"⚠️ Ошибка задач: {e}")
-
-        # --- 4. Обезличивание ---
+            send_telegram(f"Ошибка задач: {e}")
+        
+        # ИИ
+        send_telegram("5/5 Запрос к ИИ...")
         raw_text = "\n".join(logs)
-        clean_text = anonymize_text(raw_text)
-
-        # --- 5. ИИ ---
-        system_prompt = "You are a corporate auditor. Analyze the CRM logs and write a report in Russian with sections: 1. CRM ERRORS (deals without contacts), 2. CONFLICTS (aggression, caps lock), 3. PROBLEMS (delays, 'I don't know'), 4. ACHIEVEMENTS. Skip empty sections."
-
+        
         ai_resp = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"},
             json={
                 "model": "google/gemma-4-31b-it:free",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Date: {now.strftime('%d.%m.%Y')}\n\n{clean_text[:8000]}"}
-                ],
-                "max_tokens": 2000
+                "messages": [{"role": "user", "content": f"Скажи: данные получены. {raw_text}"}],
+                "max_tokens": 100
             },
-            timeout=120
+            timeout=60
         ).json()
-
-        report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', 'Нет ответа от ИИ')
-
-        # --- 6. Telegram ---
-        header = f"📊 <b>ОТЧЁТ ЗА {now.strftime('%d.%m.%Y')}</b>\n\n"
-        footer = "\n\n<i>Invisible Audit</i>"
         
-        full = header + report[:3500] + footer
-        send_telegram(full)
-
+        report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', 'Нет ответа')
+        send_telegram(f"Ответ ИИ: {report[:500]}")
+        
     except Exception as e:
-        send_telegram(f"❌ Критическая ошибка: {traceback.format_exc()[:1500]}")
+        send_telegram(f"Крах: {traceback.format_exc()[:1000]}")
 
         # --- 6. Отправка в Telegram ---
         header = f"📊 <b>ОТЧЁТ ЗА {now.strftime('%d.%m.%Y')}</b>\n\n"
