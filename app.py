@@ -575,11 +575,11 @@ def run_monthly_audit():
                         msgs.append(f"   • {name}: создано {data['total']}, закрыто {data['closed']}, просрочено {data['overdue_closed']}")
         except Exception as e:
             msgs.append(f"\n📋 Задачи: ошибка — {str(e)[:80]}")
-                                         # --- ТОВАРОДВИЖЕНИЕ ЗА МЕСЯЦ ---
+                                                # --- ТОВАРОДВИЖЕНИЕ ЗА МЕСЯЦ ---
         try:
             doc_resp = bitrix_api("catalog.document.list.json", {
                 "filter": {">=dateCreate": month_start, "<=dateCreate": today},
-                "select": ["id", "docType"]
+                "select": ["id", "docType", "title"]
             })
             documents = doc_resp.get('result', {}).get('documents', [])
             
@@ -587,6 +587,9 @@ def run_monthly_audit():
             to_production = {}
             shipped = {}
             written_off = {}
+            
+            # Защита от дублей: запоминаем обработанные пары (doc_id, element_id)
+            processed = set()
             
             for doc in documents:
                 doc_id = doc.get('id')
@@ -603,11 +606,17 @@ def run_monthly_audit():
                 for item in items:
                     product_id = str(item.get('elementId', ''))
                     quantity = float(item.get('amount') or 0)
-                    store_from = item.get('storeFrom')  # Откуда
-                    store_to = item.get('storeTo')      # Куда
+                    store_from = item.get('storeFrom')
+                    store_to = item.get('storeTo')
                     
                     if not product_id or quantity <= 0:
                         continue
+                    
+                    # Пропускаем дубли
+                    key = (doc_id, product_id, quantity, str(store_from), str(store_to))
+                    if key in processed:
+                        continue
+                    processed.add(key)
                     
                     if product_id not in product_names:
                         try:
@@ -618,18 +627,13 @@ def run_monthly_audit():
                     
                     name = product_names[product_id]
                     
-                    # Определяем тип движения по storeFrom / storeTo
                     if store_to and not store_from:
-                        # Поступление на склад
                         incoming[name] = incoming.get(name, 0) + quantity
                     elif store_from and not store_to:
-                        # Отгрузка со склада (реализация)
                         shipped[name] = shipped.get(name, 0) + quantity
                     elif store_from and store_to:
-                        # Перемещение между складами
                         to_production[name] = to_production.get(name, 0) + quantity
                     elif doc_type == 'D':
-                        # Списание (может быть без складов)
                         written_off[name] = written_off.get(name, 0) + quantity
             
             if incoming:
