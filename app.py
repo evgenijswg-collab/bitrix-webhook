@@ -446,6 +446,88 @@ def run_daily_audit():
                         msgs.append(f"   • {name}: {fmt_rub(total)} ({details})")
         except Exception as e:
             msgs.append(f"\n📦 Остатки: ошибка — {str(e)[:80]}")
+
+        def run_monthly_audit():
+    import traceback
+    try:
+        tz = pytz.timezone(TIMEZONE)
+        now = datetime.now(tz)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).strftime('%Y-%m-%d')
+        today = now.strftime('%Y-%m-%d')
+        
+        TASKS_URL = os.environ.get('BITRIX_TASKS_WEBHOOK_URL', '')
+        
+        def fmt_rub(amount):
+            return f"{amount:,.0f}".replace(",", " ")
+        
+        def fmt_num(n):
+            return f"{n}".replace(",", " ")
+        
+        msgs = [f"📅 <b>ОТЧЁТ ЗА {now.strftime('%B %Y').upper()}</b>\n"]
+        
+        # --- СДЕЛКИ ЗА МЕСЯЦ ---
+        try:
+            deals_resp = bitrix_api("crm.deal.list.json", {
+                "filter": {">=DATE_CREATE": month_start, "<=DATE_CREATE": today},
+                "select": ["ID", "TITLE", "STAGE_ID", "OPPORTUNITY"]
+            })
+            deals = deals_resp.get('result', [])
+            
+            won = [d for d in deals if d.get('STAGE_ID') == 'WON']
+            lost = [d for d in deals if d.get('STAGE_ID') == 'LOSE']
+            in_work = [d for d in deals if d.get('STAGE_ID') not in ('WON', 'LOSE')]
+            
+            sum_won = sum(float(d.get('OPPORTUNITY') or 0) for d in won)
+            sum_lost = sum(float(d.get('OPPORTUNITY') or 0) for d in lost)
+            sum_work = sum(float(d.get('OPPORTUNITY') or 0) for d in in_work)
+            
+            msgs.append(f"📊 <b>Сделки за месяц:</b>")
+            msgs.append(f"   • Создано: {len(deals)} шт.")
+            msgs.append(f"   ✅ Успешно: {len(won)} шт. на {fmt_rub(sum_won)} руб.")
+            msgs.append(f"   ❌ Провалено: {len(lost)} шт. на {fmt_rub(sum_lost)} руб.")
+            msgs.append(f"   🔄 В работе: {len(in_work)} шт. на {fmt_rub(sum_work)} руб.")
+        except Exception as e:
+            msgs.append(f"📊 Сделки: ошибка — {str(e)[:80]}")
+        
+        # --- ЗАДАЧИ ЗА МЕСЯЦ ---
+        try:
+            if TASKS_URL:
+                closed = 0
+                overdue_closed = 0
+                start = 0
+                while True:
+                    tasks_resp = requests.post(
+                        f"{TASKS_URL}task.item.list.json",
+                        json={"order": {"ID": "desc"}, "start": start},
+                        timeout=15
+                    ).json()
+                    batch = tasks_resp.get('result', [])
+                    if not batch: break
+                    
+                    for t in batch:
+                        if not isinstance(t, dict): continue
+                        status = str(t.get('STATUS', ''))
+                        closed_date = (t.get('CLOSED_DATE', '') or '')[:10]
+                        
+                        if status == '5' and closed_date >= month_start:
+                            closed += 1
+                            deadline = (t.get('DEADLINE', '') or '')[:10]
+                            if deadline and deadline < closed_date:
+                                overdue_closed += 1
+                    
+                    start += 50
+                    if start >= 1000: break
+                
+                msgs.append(f"\n📋 <b>Задачи за месяц:</b>")
+                msgs.append(f"   • Закрыто задач: {closed}")
+                msgs.append(f"   • Закрыто с просрочкой: {overdue_closed}")
+        except Exception as e:
+            msgs.append(f"\n📋 Задачи: ошибка — {str(e)[:80]}")
+        
+        send_telegram("\n".join(msgs))
+        
+    except Exception as e:
+        send_telegram(f"❌ Ошибка месячного отчёта: {traceback.format_exc()[:500]}")
         
         # --- ИИ-анализ ---
         try:
@@ -605,9 +687,16 @@ def telegram_webhook():
         text = message.get('text', '')
         chat_id = message.get('chat', {}).get('id', '')
         
-        if text and 'отчет' in text.lower() and chat_id:
-            threading.Thread(target=run_daily_audit, daemon=True).start()
-            send_telegram("🟢 Запускаю аудит... Отчёт придёт через минуту.")
+               if text and chat_id:
+            text_lower = text.lower()
+            
+            if 'отчет за месяц' in text_lower or 'отчёт за месяц' in text_lower:
+                threading.Thread(target=run_monthly_audit, daemon=True).start()
+                send_telegram("🟢 Запускаю отчёт за месяц... Это займёт до минуты.")
+            
+            elif 'отчет' in text_lower or 'отчёт' in text_lower:
+                threading.Thread(target=run_daily_audit, daemon=True).start()
+                send_telegram("🟢 Запускаю аудит за сегодня... Отчёт придёт через минуту.")
         
         return jsonify({"ok": True}), 200
     except:
