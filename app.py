@@ -575,6 +575,44 @@ def run_monthly_audit():
                         msgs.append(f"   • {name}: создано {data['total']}, закрыто {data['closed']}, просрочено {data['overdue_closed']}")
         except Exception as e:
             msgs.append(f"\n📋 Задачи: ошибка — {str(e)[:80]}")
+                    # --- СКЛАДСКИЕ ДОКУМЕНТЫ ЗА МЕСЯЦ ---
+        try:
+            doc_resp = bitrix_api("catalog.document.list.json", {
+                "filter": {">=dateCreate": month_start, "<=dateCreate": today},
+                "select": ["id", "docType", "title", "total"]
+            })
+            documents = doc_resp.get('result', {}).get('documents', [])
+            
+            # Группируем по типам: A=приход, M=перемещение, D=списание, R=реализация
+            doc_by_type = {}
+            for doc in documents:
+                dtype = doc.get('docType', '?')
+                if dtype not in doc_by_type:
+                    doc_by_type[dtype] = {"count": 0, "total": 0, "titles": []}
+                doc_by_type[dtype]["count"] += 1
+                doc_by_type[dtype]["total"] += float(doc.get('total') or 0)
+                doc_by_type[dtype]["titles"].append(doc.get('title', '')[:60])
+            
+            if doc_by_type:
+                msgs.append(f"\n📦 <b>Складские документы за месяц:</b>")
+                
+                type_names = {
+                    "A": "Приход (поступление)",
+                    "M": "Перемещение (в производство)",
+                    "D": "Списание",
+                    "R": "Реализация (отгрузка клиенту)",
+                    "S": "Оприходование"
+                }
+                
+                for dtype, name in type_names.items():
+                    if dtype in doc_by_type:
+                        data = doc_by_type[dtype]
+                        msgs.append(f"   • {name}: {data['count']} док. на {fmt_rub(data['total'])} руб.")
+                        # Покажем названия для контекста
+                        for t in data['titles'][:3]:
+                            msgs.append(f"     - {t}")
+        except Exception as e:
+            msgs.append(f"\n📦 Складские документы: ошибка — {str(e)[:80]}")
 
         # --- ИИ-анализ (месяц) ---
         try:
