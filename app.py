@@ -394,7 +394,31 @@ def audit_test():
         return jsonify({"result": True, "tasks_count": len(tasks)}), 200
     except Exception as e:
         return jsonify({"result": False, "error": str(e)}), 500
-
+@app.route('/ai-test', methods=['GET'])
+def ai_test():
+    try:
+        resp = requests.post(
+            AI_API_URL,
+            headers={
+                "Authorization": f"Bearer {AI_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": AI_MODEL,
+                "messages": [
+                    {"role": "user", "content": "Скажи: тест пройден"}
+                ],
+                "max_tokens": 50
+            },
+            timeout=30
+        )
+        return jsonify({
+            "status_code": resp.status_code,
+            "headers": dict(resp.headers),
+            "body": resp.text[:1000]
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
