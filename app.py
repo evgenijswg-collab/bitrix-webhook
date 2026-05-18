@@ -398,7 +398,8 @@ def run_daily_audit():
         except Exception as e:
             msgs.append(f"\n📋 Задачи: ошибка — {str(e)[:80]}")
 
-                # --- ИИ-анализ ---
+              
+              # --- ИИ-анализ ---
         try:
             raw_text = "\n".join(msgs)
             ai_resp = requests.post(
@@ -407,20 +408,21 @@ def run_daily_audit():
                 json={
                     "model": "google/gemma-4-31b-it:free",
                     "messages": [
-                        {"role": "system", "content": "Ты — корпоративный аналитик. Посмотри на показатели CRM за сегодня и напиши краткий вывод на русском языке (3-5 предложений): что хуже всего, кто перегружен, на что директору обратить внимание. Будь конкретным: называй имена и цифры."},
-                        {"role": "user", "content": raw_text}
+                        {"role": "user", "content": f"Напиши один вывод на русском: {raw_text[:500]}"}
                     ],
-                    "max_tokens": 600,
+                    "max_tokens": 200,
                     "temperature": 0.5
                 },
-                timeout=120
-            ).json()
-            
-            ai_report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', '')
+                timeout=60
+            )
+            ai_json = ai_resp.json()
+            ai_report = ai_json.get('choices', [{}])[0].get('message', {}).get('content', '')
             if ai_report:
-                msgs.append(f"\n\n🤖 <b>Анализ ИИ:</b>\n{ai_report}")
-        except:
-            pass
+                msgs.append(f"\n\n🤖 <b>ИИ:</b>\n{ai_report}")
+            else:
+                msgs.append(f"\n\n⚠️ ИИ не ответил: {str(ai_json)[:300]}")
+        except Exception as e:
+            msgs.append(f"\n\n⚠️ Ошибка ИИ: {str(e)[:200]}")
         
         send_telegram("\n".join(msgs))
         
