@@ -339,33 +339,44 @@ def run_daily_audit():
         except Exception as e:
             msgs.append(f"\n📦 Производство: ошибка — {str(e)[:80]}")
         
-        # --- ЗАДАЧИ ---
-                # --- ЗАДАЧИ ---
+      # --- ЗАДАЧИ (постраничная загрузка) ---
         try:
             if TASKS_URL:
-                tasks_resp = requests.post(f"{TASKS_URL}task.item.list.json", json={"order": {"ID": "desc"}}, timeout=15).json()
-                all_tasks = tasks_resp.get('result', [])
-                
                 employees = {}
-                for t in all_tasks:
-                    if not isinstance(t, dict):
-                        continue
+                start = 0
+                while True:
+                    tasks_resp = requests.post(
+                        f"{TASKS_URL}task.item.list.json",
+                        json={"order": {"ID": "desc"}, "start": start},
+                        timeout=15
+                    ).json()
                     
-                    # Пропускаем только завершённые (STATUS=5) и закрытые (STATUS=6)
-                    status = str(t.get('STATUS', ''))
-                    if status in ('5', '6', '7'):
-                        continue
+                    batch = tasks_resp.get('result', [])
+                    if not batch:
+                        break
                     
-                    uid = str(t.get('RESPONSIBLE_ID', '0'))
-                    if uid == '0':
-                        continue
+                    for t in batch:
+                        if not isinstance(t, dict):
+                            continue
+                        status = str(t.get('STATUS', ''))
+                        if status in ('5', '6', '7'):
+                            continue
+                        
+                        uid = str(t.get('RESPONSIBLE_ID', '0'))
+                        if uid == '0':
+                            continue
+                        
+                        deadline = t.get('DEADLINE', '')[:10]
+                        if uid not in employees:
+                            employees[uid] = {"total": 0, "overdue": 0}
+                        employees[uid]["total"] += 1
+                        if deadline and deadline < today:
+                            employees[uid]["overdue"] += 1
                     
-                    deadline = t.get('DEADLINE', '')[:10]
-                    if uid not in employees:
-                        employees[uid] = {"total": 0, "overdue": 0}
-                    employees[uid]["total"] += 1
-                    if deadline and deadline < today:
-                        employees[uid]["overdue"] += 1
+                    start += 50
+                    # Ограничение: максимум 10 страниц = 500 задач
+                    if start >= 500:
+                        break
                 
                 total_t = sum(e['total'] for e in employees.values())
                 total_o = sum(e['overdue'] for e in employees.values())
