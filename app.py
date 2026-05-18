@@ -400,27 +400,49 @@ def run_daily_audit():
 
               
               # --- ИИ-анализ ---
-        try:
+             try:
             raw_text = "\n".join(msgs)
-            ai_resp = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"},
-                json={
-                    "model": "google/gemma-4-31b-it:free",
-                    "messages": [
-                        {"role": "user", "content": f"Напиши один вывод на русском: {raw_text[:500]}"}
-                    ],
-                    "max_tokens": 200,
-                    "temperature": 0.5
-                },
-                timeout=60
-            )
-            ai_json = ai_resp.json()
-            ai_report = ai_json.get('choices', [{}])[0].get('message', {}).get('content', '')
+            
+            models = [
+                "google/gemma-4-31b-it:free",
+                "meta-llama/llama-3.3-70b-instruct:free",
+                "qwen/qwen3-next-80b-a3b-instruct:free"
+            ]
+            
+            ai_report = None
+            for model in models:
+                for attempt in range(3):
+                    try:
+                        ai_resp = requests.post(
+                            "https://openrouter.ai/api/v1/chat/completions",
+                            headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"},
+                            json={
+                                "model": model,
+                                "messages": [
+                                    {"role": "user", "content": f"Напиши краткий вывод на русском (2-3 предложения): что хуже всего в этих данных, на что обратить внимание.\n\n{raw_text[:800]}"}
+                                ],
+                                "max_tokens": 300,
+                                "temperature": 0.5
+                            },
+                            timeout=30
+                        ).json()
+                        
+                        ai_report = ai_json.get('choices', [{}])[0].get('message', {}).get('content', '')
+                        if ai_report:
+                            break
+                    except:
+                        pass
+                    time.sleep(3)
+                
+                if ai_report:
+                    break
+                else:
+                    time.sleep(5)
+            
             if ai_report:
                 msgs.append(f"\n\n🤖 <b>ИИ:</b>\n{ai_report}")
             else:
-                msgs.append(f"\n\n⚠️ ИИ не ответил: {str(ai_json)[:300]}")
+                msgs.append(f"\n\n⚠️ Все модели ИИ недоступны (лимит). Попробуйте позже.")
         except Exception as e:
             msgs.append(f"\n\n⚠️ Ошибка ИИ: {str(e)[:200]}")
         
