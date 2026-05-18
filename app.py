@@ -425,7 +425,16 @@ def run_daily_audit():
                         },
                         timeout=30
                     ).json()
-                    ai_report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', '')
+                    raw_choices = ai_resp.get('choices', [])
+if raw_choices:
+    # Берём первый непустой ответ
+    for choice in raw_choices:
+        content = choice.get('message', {}).get('content', '')
+        if content and len(content) > 10:
+            ai_report = content
+            break
+    if not ai_report:
+        ai_report = raw_choices[0].get('message', {}).get('content', '')
                     if ai_report:
                         msgs.append(f"\n\n🤖 <b>ИИ ({model}):</b>\n{ai_report}")
                         break
@@ -678,7 +687,16 @@ def run_monthly_audit():
                         },
                         timeout=30
                     ).json()
-                    ai_report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', '')
+                    raw_choices = ai_resp.get('choices', [])
+if raw_choices:
+    # Берём первый непустой ответ
+    for choice in raw_choices:
+        content = choice.get('message', {}).get('content', '')
+        if content and len(content) > 10:
+            ai_report = content
+            break
+    if not ai_report:
+        ai_report = raw_choices[0].get('message', {}).get('content', '')
                     if ai_report:
                         msgs.append(f"\n\n🤖 <b>ИИ:</b>\n{ai_report}")
                         break
