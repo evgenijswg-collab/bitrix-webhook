@@ -575,11 +575,11 @@ def run_monthly_audit():
                         msgs.append(f"   • {name}: создано {data['total']}, закрыто {data['closed']}, просрочено {data['overdue_closed']}")
         except Exception as e:
             msgs.append(f"\n📋 Задачи: ошибка — {str(e)[:80]}")
-                                                # --- ТОВАРОДВИЖЕНИЕ ЗА МЕСЯЦ ---
+                                                       # --- ТОВАРОДВИЖЕНИЕ ЗА МЕСЯЦ ---
         try:
             doc_resp = bitrix_api("catalog.document.list.json", {
                 "filter": {">=dateCreate": month_start, "<=dateCreate": today},
-                "select": ["id", "docType", "title"]
+                "select": ["id", "docType"]
             })
             documents = doc_resp.get('result', {}).get('documents', [])
             
@@ -588,19 +588,15 @@ def run_monthly_audit():
             shipped = {}
             written_off = {}
             
-            # Защита от дублей: запоминаем обработанные пары (doc_id, element_id)
-            processed = set()
-            
             for doc in documents:
                 doc_id = doc.get('id')
                 doc_type = doc.get('docType', '')
                 
-                 try:
+                try:
                     items_resp = bitrix_api("catalog.document.element.list.json", {
                         "DOC_ID": int(doc_id)
                     })
                     all_items = items_resp.get('result', {}).get('documentElements', [])
-                    # Фильтруем вручную — API игнорирует DOC_ID
                     items = [i for i in all_items if i.get('docId') == doc_id]
                 except:
                     continue
@@ -613,12 +609,6 @@ def run_monthly_audit():
                     
                     if not product_id or quantity <= 0:
                         continue
-                    
-                    # Пропускаем дубли
-                    key = (doc_id, product_id, quantity, str(store_from), str(store_to))
-                    if key in processed:
-                        continue
-                    processed.add(key)
                     
                     if product_id not in product_names:
                         try:
