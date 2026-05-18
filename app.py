@@ -253,10 +253,9 @@ def run_daily_audit():
         
         TASKS_URL = os.environ.get('BITRIX_TASKS_WEBHOOK_URL', '')
         
-        # Кэш имён пользователей
         users = {}
-        
         def get_user_name(uid):
+            if not uid or uid == '?': return 'Не назначен'
             if uid not in users:
                 try:
                     resp = requests.post(f"{WEBHOOK_URL}user.get.json", json={"ID": int(uid)}, timeout=5).json()
@@ -266,7 +265,6 @@ def run_daily_audit():
                     users[uid] = f"User {uid}"
             return users[uid]
         
-        # Стадии сделок
         STAGE_NAMES = {
             "NEW": "Новый ЗАКАЗ", "PREPARATION": "Предварительный расчёт",
             "PREPAYMENT_INVOICE": "Предварительное согласование", "UC_RPM0AV": "Финальный расчёт",
@@ -276,7 +274,6 @@ def run_daily_audit():
             "WON": "Успешно", "LOSE": "Провал"
         }
         
-        # Стадии смарт-процесса
         SMART_STAGES = {
             "DT1046_16:NEW": "Проверка ТЗ",
             "DT1046_16:UC_L5A63P": "Ожидание камня/Закупка",
@@ -287,44 +284,68 @@ def run_daily_audit():
             "DT1046_16:FAIL": "Провал"
         }
         
-        logs = []
         telegram_logs = []
         
-        # --- 1. СДЕЛКИ ---
+        # --- 1. ЛИДЫ ---
+        try:
+            leads_today = bitrix_api("crm.lead.list.json", {
+                "filter": {">=DATE_MODIFY": today},
+                "select": ["ID", "TITLE", "STATUS_ID", "OPPORTUNITY"]
+            })
+            leads = leads_today.get('result', [])
+            
+            leads_active = [l for l in leads if l.get('STATUS_ID') not in ('CONVERTED', 'JUNK')]
+            leads_won = [l for l in leads if l.get('STATUS_ID') == 'CONVERTED']
+            leads_lost = [l for l in leads if l.get('STATUS_ID') == 'JUNK']
+            
+            sum_active = sum(float(l.get('OPPORTUNITY') or 0) for l in leads_active)
+            sum_won = sum(float(l.get('OPPORTUNITY') or 0) for l in leads_won)
+            sum_lost = sum(float(l.get('OPPORTUNITY') or 0) for l in leads_lost)
+            
+            if leads:
+                telegram_logs.append(f"🔹 <b>Лиды сегодня:</b> {len(leads_active)} в работе на {sum_active:,.0f} руб.")
+                telegram_logs.append(f"   ✅ Перешло в сделку: {len(leads_won)} на {sum_won:,.0f} руб.")
+                telegram_logs.append(f"   ❌ Провалено: {len(leads_lost)} на {sum_lost:,.0f} руб.")
+            else:
+                telegram_logs.append(f"🔹 <b>Лиды сегодня:</b> 0 шт.")
+        except Exception as e:
+            telegram_logs.append(f"🔹 Лиды: ошибка — {str(e)[:100]}")
+        
+        # --- 2. СДЕЛКИ ---
         deals_resp = bitrix_api("crm.deal.list.json", {
             "filter": {"!STAGE_ID": "WON"},
-            "select": ["ID", "TITLE", "STAGE_ID", "OPPORTUNITY", "ASSIGNED_BY_ID"]
+            "select": ["ID", "TITLE", "STAGE_ID", "OPPORTUNITY", "DATE_MODIFY"]
         })
         deals = deals_resp.get('result', [])
         
-        # Группировка
         in_work = []
         won_today = []
         lost_today = []
         
         for deal in deals:
             stage = deal.get('STAGE_ID', '')
-            opp = float(deal.get('OPPORTUNITY') or 0)
-            if stage in ("WON",):
+            date_mod = deal.get('DATE_MODIFY', '')[:10]
+            
+            if stage == "WON" and date_mod == today:
                 won_today.append(deal)
-            elif stage in ("LOSE",):
+            elif stage == "LOSE" and date_mod == today:
                 lost_today.append(deal)
-            else:
+            elif stage not in ("WON", "LOSE"):
                 in_work.append(deal)
         
         total_in_work = sum(float(d.get('OPPORTUNITY') or 0) for d in in_work)
         total_won = sum(float(d.get('OPPORTUNITY') or 0) for d in won_today)
         total_lost = sum(float(d.get('OPPORTUNITY') or 0) for d in lost_today)
         
-        logs.append(f"СДЕЛКИ В РАБОТЕ: {len(in_work)} шт., {total_in_work:,.0f} руб.")
-        logs.append(f"УСПЕШНО: {len(won_today)} шт., {total_won:,.0f} руб.")
-        logs.append(f"ПРОВАЛЕНО: {len(lost_today)} шт., {total_lost:,.0f} руб.")
+        telegram_logs.append(f"\n📊 <b>Сделки в работе:</b> {len(in_work)} шт. на {total_in_work:,.0f} руб.")
+        if won_today:
+            telegram_logs.append(f"   ✅ <b>Успешно сегодня:</b> {len(won_today)} шт. на {total_won:,.0f} руб.")
+        if lost_today:
+            telegram_logs.append(f"   ❌ <b>Провалено сегодня:</b> {len(lost_today)} шт. на {total_lost:,.0f} руб.")
+        if not won_today and not lost_today:
+            telegram_logs.append(f"   (за сегодня изменений нет)")
         
-        telegram_logs.append(f"📊 <b>Сделки в работе:</b> {len(in_work)} шт. на {total_in_work:,.0f} руб.")
-        telegram_logs.append(f"✅ <b>Успешно:</b> {len(won_today)} шт. на {total_won:,.0f} руб.")
-        telegram_logs.append(f"❌ <b>Провалено:</b> {len(lost_today)} шт. на {total_lost:,.0f} руб.")
-        
-        # --- 2. СМАРТ-ПРОЦЕСС 1046 ---
+        # --- 3. СМАРТ-ПРОЦЕСС ---
         try:
             smart_resp = bitrix_api("crm.item.list.json", {
                 "entityTypeId": SMART_ENTITY_TYPE_ID,
@@ -339,16 +360,18 @@ def run_daily_audit():
                 name = SMART_STAGES.get(sid, sid)
                 smart_by_stage[name] = smart_by_stage.get(name, 0) + 1
             
-            logs.append(f"\nСМАРТ-ПРОЦЕСС: {len(smart_items)} заказов")
-            telegram_logs.append(f"\n📦 <b>Производство:</b> {len(smart_items)} заказов")
-            for stage_name, count in smart_by_stage.items():
-                logs.append(f"  {stage_name}: {count}")
-                if stage_name in ("Изготовление", "Готово к отгрузке"):
-                    telegram_logs.append(f"• {stage_name}: {count}")
+            if smart_items:
+                telegram_logs.append(f"\n📦 <b>Производство:</b> {len(smart_items)} заказов")
+                for stage_name in ("Изготовление", "Готово к отгрузке"):
+                    count = smart_by_stage.get(stage_name, 0)
+                    if count:
+                        telegram_logs.append(f"   • {stage_name}: {count}")
+            else:
+                telegram_logs.append(f"\n📦 <b>Производство:</b> 0 заказов")
         except Exception as e:
-            logs.append(f"⚠️ Смарт-процесс: {e}")
+            telegram_logs.append(f"\n📦 Производство: ошибка — {str(e)[:100]}")
         
-        # --- 3. ЗАДАЧИ ---
+        # --- 4. ЗАДАЧИ ---
         try:
             if TASKS_URL:
                 tasks_resp = requests.post(f"{TASKS_URL}task.item.list.json", json={"order": {"ID": "desc"}}, timeout=10).json()
@@ -357,8 +380,17 @@ def run_daily_audit():
                 employees = {}
                 for task in tasks:
                     if isinstance(task, dict):
-                        uid = str(task.get('RESPONSIBLE_ID', '?'))
+                        # Берём RESPONSIBLE_ID — ответственный, а не постановщик
+                        uid = str(task.get('RESPONSIBLE_ID', ''))
+                        if not uid or uid == '0':
+                            continue
+                        
                         deadline = task.get('DEADLINE', '')
+                        status = task.get('STATUS', '')
+                        
+                        # Только незавершённые задачи (статус не 5 и не 6)
+                        if status in ('5', '6', '7'):
+                            continue
                         
                         if uid not in employees:
                             employees[uid] = {"total": 0, "overdue": 0}
@@ -370,23 +402,25 @@ def run_daily_audit():
                 total_tasks = sum(e['total'] for e in employees.values())
                 total_overdue = sum(e['overdue'] for e in employees.values())
                 
-                telegram_logs.append(f"\n📋 <b>Задачи:</b> {total_tasks} всего, <b>просрочено: {total_overdue}</b>")
+                telegram_logs.append(f"\n📋 <b>Задачи в работе:</b> {total_tasks}, <b>просрочено: {total_overdue}</b>")
                 
+                # Все сотрудники с задачами
                 for uid, data in sorted(employees.items(), key=lambda x: x[1]['total'], reverse=True):
                     name = get_user_name(uid)
-                    logs.append(f"  {name}: {data['total']} задач, просрочено: {data['overdue']}")
-                    
-                    if data['total'] > 5 or data['overdue'] > 3:
-                        telegram_logs.append(f"• {name}: {data['total']} задач, просрочено: {data['overdue']}")
+                    telegram_logs.append(f"   • {name}: {data['total']} задач, просрочено: {data['overdue']}")
+                
+                # Отдельно просроченные
+                overdue_employees = {uid: d for uid, d in employees.items() if d['overdue'] > 0}
+                if overdue_employees:
+                    telegram_logs.append(f"\n⚠️ <b>Просроченные задачи:</b>")
+                    for uid, data in sorted(overdue_employees.items(), key=lambda x: x[1]['overdue'], reverse=True):
+                        name = get_user_name(uid)
+                        telegram_logs.append(f"   • {name}: {data['overdue']} просрочено")
         except Exception as e:
-            logs.append(f"⚠️ Задачи: {e}")
+            telegram_logs.append(f"\n📋 Задачи: ошибка — {str(e)[:100]}")
         
-        # --- 4. Отправка в Telegram ---
-        report_text = "\n".join(telegram_logs)
-        send_telegram(report_text)
-        
-        # --- 5. ИИ (опционально) ---
-        # Пропускаем, т.к. данные уже отправлены
+        # --- 5. Отправка ---
+        send_telegram("\n".join(telegram_logs))
         
     except Exception as e:
         send_telegram(f"❌ Крах: {traceback.format_exc()[:1000]}")
