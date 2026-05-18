@@ -595,11 +595,13 @@ def run_monthly_audit():
                 doc_id = doc.get('id')
                 doc_type = doc.get('docType', '')
                 
-                try:
+                 try:
                     items_resp = bitrix_api("catalog.document.element.list.json", {
                         "DOC_ID": int(doc_id)
                     })
-                    items = items_resp.get('result', {}).get('documentElements', [])
+                    all_items = items_resp.get('result', {}).get('documentElements', [])
+                    # Фильтруем вручную — API игнорирует DOC_ID
+                    items = [i for i in all_items if i.get('docId') == doc_id]
                 except:
                     continue
                 
