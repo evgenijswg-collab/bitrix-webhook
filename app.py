@@ -248,29 +248,26 @@ def run_daily_audit():
         
         tz = pytz.timezone(TIMEZONE)
         now = datetime.now(tz)
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         
-        # Тест ИИ
         ai_resp = requests.post(
             AI_API_URL,
             headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"},
             json={
-                "model": AI_MODEL,
+                "model": "meta-llama/llama-3.3-70b-instruct:free",
                 "messages": [
-                    {"role": "system", "content": "Ты аудитор. Составь краткий тестовый отчёт."},
-                    {"role": "user", "content": f"Сегодня {now.strftime('%d.%m.%Y')}. Сделок: 3, Задач: 5. Всё в порядке."}
+                    {"role": "user", "content": "Say: test passed"}
                 ],
-                "max_tokens": 500
+                "max_tokens": 50
             },
             timeout=60
         ).json()
         
-        report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', 'Нет ответа')
+        report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', 'No response')
         
-        send_telegram(f"📊 Тестовый отчёт:\n\n{report}")
+        send_telegram(f"📊 Report:\n\n{report}")
         
     except Exception as e:
-        send_telegram(f"❌ Ошибка: {str(e)}")
+        send_telegram(f"❌ Error: {str(e)}")
 
         # --- 6. Отправка в Telegram ---
         header = f"📊 <b>ОТЧЁТ ЗА {now.strftime('%d.%m.%Y')}</b>\n\n"
