@@ -575,7 +575,7 @@ def run_monthly_audit():
                         msgs.append(f"   • {name}: создано {data['total']}, закрыто {data['closed']}, просрочено {data['overdue_closed']}")
         except Exception as e:
             msgs.append(f"\n📋 Задачи: ошибка — {str(e)[:80]}")
-                            # --- ТОВАРОДВИЖЕНИЕ ЗА МЕСЯЦ ---
+                                  # --- ТОВАРОДВИЖЕНИЕ ЗА МЕСЯЦ ---
         try:
             doc_resp = bitrix_api("catalog.document.list.json", {
                 "filter": {">=dateCreate": month_start, "<=dateCreate": today},
@@ -583,32 +583,29 @@ def run_monthly_audit():
             })
             documents = doc_resp.get('result', {}).get('documents', [])
             
-            # Словари: тип_документа -> {товар: количество}
-            incoming = {}      # Приход (A, S)
-            to_production = {} # Перемещение (M)
-            shipped = {}       # Реализация (R)
-            written_off = {}   # Списание (D)
+            incoming = {}
+            to_production = {}
+            shipped = {}
+            written_off = {}
             
             for doc in documents:
                 doc_id = doc.get('id')
                 doc_type = doc.get('docType', '')
                 
-                # Получаем товары внутри документа
                 try:
                     items_resp = bitrix_api("catalog.document.element.list.json", {
-                        "filter": {"DOC_ID": int(doc_id)}
+                        "DOC_ID": int(doc_id)
                     })
-                    items = items_resp.get('result', {}).get('elements', [])
+                    items = items_resp.get('result', {}).get('documentElements', [])
                 except:
                     continue
                 
                 for item in items:
-                    product_id = str(item.get('ELEMENT_ID', ''))
-                    quantity = float(item.get('AMOUNT') or 0)
+                    product_id = str(item.get('elementId', ''))
+                    quantity = float(item.get('amount') or 0)
                     if not product_id or quantity <= 0:
                         continue
                     
-                    # Получаем название товара (кэшируем в product_names)
                     if product_id not in product_names:
                         try:
                             p_resp = bitrix_api("catalog.product.get.json", {"id": int(product_id)})
@@ -618,16 +615,15 @@ def run_monthly_audit():
                     
                     name = product_names[product_id]
                     
-                    if doc_type in ('A', 'S'):  # Приход / Оприходование
+                    if doc_type in ('A', 'S'):
                         incoming[name] = incoming.get(name, 0) + quantity
-                    elif doc_type == 'M':  # Перемещение
+                    elif doc_type == 'M':
                         to_production[name] = to_production.get(name, 0) + quantity
-                    elif doc_type == 'R':  # Реализация
+                    elif doc_type == 'R':
                         shipped[name] = shipped.get(name, 0) + quantity
-                    elif doc_type == 'D':  # Списание
+                    elif doc_type == 'D':
                         written_off[name] = written_off.get(name, 0) + quantity
             
-            # Выводим
             if incoming:
                 msgs.append(f"\n📥 <b>Принято на склад сырья:</b>")
                 for name, qty in sorted(incoming.items(), key=lambda x: x[1], reverse=True):
