@@ -354,10 +354,17 @@ def run_daily_audit():
             report = f"⚠️ Ошибка при обращении к ИИ: {str(e)[:300]}"
 
         # --- 6. Отправка в Telegram ---
-        header = f"📊 <b>ОТЧЁТ ПО КОНТРОЛЮ ЗА {now.strftime('%d.%m.%Y')}</b>\n\n"
-        footer = "\n\n<i>Автоматический отчёт. Система Invisible Audit.</i>"
+        header = f"📊 <b>ОТЧЁТ ЗА {now.strftime('%d.%m.%Y')}</b>\n\n"
+        footer = "\n\n<i>Invisible Audit</i>"
 
-        full_report = header + report + footer
+        # Логируем для отладки
+        debug_info = f"DEBUG:\nAI_API_URL: {AI_API_URL}\nModel: {AI_MODEL}\n"
+        debug_info += f"Report length: {len(report)}\n"
+        debug_info += f"Report preview: {report[:300]}\n"
+        debug_info += f"Total logs: {len(raw_text)} chars, {len(clean_text)} chars cleaned\n"
+        
+        full_report = header + debug_info + "\n---\n" + report[:3000] + footer
+        
         if len(full_report) > 4000:
             chunks = [full_report[i:i+4000] for i in range(0, len(full_report), 4000)]
             for chunk in chunks:
@@ -365,9 +372,6 @@ def run_daily_audit():
                 time.sleep(0.5)
         else:
             send_telegram(full_report)
-
-    except Exception as e:
-        send_telegram(f"⚠️ Критическая ошибка аудита: {str(e)[:500]}")
 
 
 # ============================================================
