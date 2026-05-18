@@ -244,30 +244,33 @@ def daily_audit_route():
 
 def run_daily_audit():
     try:
-        send_telegram("🟢 Старт аудита")
+        send_telegram("🟢 Старт аудита через DeepSeek")
         
         tz = pytz.timezone(TIMEZONE)
         now = datetime.now(tz)
         
         ai_resp = requests.post(
             AI_API_URL,
-            headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bearer {AI_API_KEY}",
+                "Content-Type": "application/json"
+            },
             json={
-                "model": "meta-llama/llama-3.3-70b-instruct:free",
+                "model": AI_MODEL,
                 "messages": [
-                    {"role": "user", "content": "Say: test passed"}
+                    {"role": "user", "content": "Скажи: тест пройден"}
                 ],
                 "max_tokens": 50
             },
             timeout=60
         ).json()
         
-        report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', 'No response')
+        report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', 'Нет ответа')
         
-        send_telegram(f"📊 Report:\n\n{report}")
+        send_telegram(f"📊 DeepSeek:\n\n{report}")
         
     except Exception as e:
-        send_telegram(f"❌ Error: {str(e)}")
+        send_telegram(f"❌ Ошибка: {str(e)}")
 
         # --- 6. Отправка в Telegram ---
         header = f"📊 <b>ОТЧЁТ ЗА {now.strftime('%d.%m.%Y')}</b>\n\n"
