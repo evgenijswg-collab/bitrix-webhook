@@ -243,51 +243,97 @@ def daily_audit_route():
 
 
 def run_daily_audit():
+    """Основная функция аудита за текущий день"""
+    import traceback
     try:
-        send_telegram("🟢 Старт аудита")
-        
         tz = pytz.timezone(TIMEZONE)
         now = datetime.now(tz)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+        send_telegram("🟢 Собираю данные из Битрикс24...")
         
-        # Пробуем до 5 попыток с разными моделями
-        models = [
-            "qwen/qwen3-next-80b-a3b-instruct:free",
-            "meta-llama/llama-3.3-70b-instruct:free",
-            "google/gemma-4-31b-it:free"
-        ]
+        logs = []
+
+        # --- 1. Сбор лидов ---
+        try:
+            leads_resp = bitrix_api("crm.lead.list.json", {
+                "filter": {">=DATE_MODIFY": today_start},
+                "select": ["ID", "TITLE", "STATUS_ID", "ASSIGNED_BY_ID", "CONTACT_ID", "COMPANY_ID"]
+            })
+            leads = leads_resp.get('result', [])
+            logs.append(f"=== ЛИДЫ ({len(leads)}) ===")
+            for lead in leads:
+                logs.append(f"[Лид #{lead['id']}] {lead['title']} | Контакт: {lead.get('contactId','нет')}")
+        except Exception as e:
+            logs.append(f"⚠️ Ошибка лидов: {e}")
+
+        # --- 2. Сбор сделок ---
+        try:
+            deals_resp = bitrix_api("crm.deal.list.json", {
+                "filter": {">=DATE_MODIFY": today_start},
+                "select": ["ID", "TITLE", "STAGE_ID", "OPPORTUNITY", "CONTACT_ID"]
+            })
+            deals = deals_resp.get('result', [])
+            logs.append(f"\n=== СДЕЛКИ ({len(deals)}) ===")
+            for deal in deals:
+                logs.append(f"[Сделка #{deal['id']}] {deal['title']} | Сумма: {deal.get('opportunity')} | Контакт: {deal.get('contactId','нет')}")
+        except Exception as e:
+            logs.append(f"⚠️ Ошибка сделок: {e}")
+
+        # --- 3. Сбор задач ---
+        try:
+            tasks_resp = bitrix_api("tasks.task.list.json", {
+                "filter": {">=CHANGED_DATE": today_start},
+                "select": ["ID", "TITLE", "STATUS", "RESPONSIBLE_ID"]
+            })
+            tasks = tasks_resp.get('result', {}).get('tasks', [])
+            logs.append(f"\n=== ЗАДАЧИ ({len(tasks)}) ===")
+            for task in tasks[:10]:
+                task_id = task['id']
+                logs.append(f"[Задача #{task_id}] {task['title']} | Статус: {task['status']}")
+                try:
+                    comments_resp = bitrix_api("task.commentitem.getlist.json", {"TASKID": task_id})
+                    comments = comments_resp.get('result', [])
+                    for c in comments[:5]:
+                        if isinstance(c, dict):
+                            logs.append(f"  ↳ {c.get('POST_MESSAGE','')[:150]}")
+                except:
+                    pass
+        except Exception as e:
+            logs.append(f"⚠️ Ошибка задач: {e}")
+
+        # --- 4. Обезличивание ---
+        raw_text = "\n".join(logs)
+        clean_text = anonymize_text(raw_text)
+
+        # --- 5. ИИ ---
+        system_prompt = "You are a corporate auditor. Analyze the CRM logs and write a report in Russian with sections: 1. CRM ERRORS (deals without contacts), 2. CONFLICTS (aggression, caps lock), 3. PROBLEMS (delays, 'I don't know'), 4. ACHIEVEMENTS. Skip empty sections."
+
+        ai_resp = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": "google/gemma-4-31b-it:free",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Date: {now.strftime('%d.%m.%Y')}\n\n{clean_text[:8000]}"}
+                ],
+                "max_tokens": 2000
+            },
+            timeout=120
+        ).json()
+
+        report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', 'Нет ответа от ИИ')
+
+        # --- 6. Telegram ---
+        header = f"📊 <b>ОТЧЁТ ЗА {now.strftime('%d.%m.%Y')}</b>\n\n"
+        footer = "\n\n<i>Invisible Audit</i>"
         
-        report = None
-        for model in models:
-            try:
-                resp = requests.post(
-                    AI_API_URL,
-                    headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"},
-                    json={
-                        "model": model,
-                        "messages": [{"role": "user", "content": "Say: ok"}],
-                        "max_tokens": 20
-                    },
-                    timeout=30
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
-                    if content:
-                        report = f"Модель {model}: {content}"
-                        break
-                else:
-                    send_telegram(f"⚠️ {model}: {resp.status_code}")
-            except:
-                pass
-            time.sleep(2)
-        
-        if report:
-            send_telegram(f"📊 {report}")
-        else:
-            send_telegram("❌ Все модели недоступны")
-        
+        full = header + report[:3500] + footer
+        send_telegram(full)
+
     except Exception as e:
-        send_telegram(f"❌ Ошибка: {str(e)}")
+        send_telegram(f"❌ Критическая ошибка: {traceback.format_exc()[:1500]}")
 
         # --- 6. Отправка в Telegram ---
         header = f"📊 <b>ОТЧЁТ ЗА {now.strftime('%d.%m.%Y')}</b>\n\n"
