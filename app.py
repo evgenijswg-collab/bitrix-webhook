@@ -472,5 +472,37 @@ def ai_test():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/task-statuses', methods=['GET'])
+def task_statuses():
+    TASKS_URL = os.environ.get('BITRIX_TASKS_WEBHOOK_URL', '')
+    if not TASKS_URL:
+        return jsonify({"error": "no tasks url"}), 500
+    
+    statuses = {}
+    start = 0
+    while True:
+        resp = requests.post(f"{TASKS_URL}task.item.list.json", json={"order": {"ID": "desc"}, "start": start}, timeout=15).json()
+        batch = resp.get('result', [])
+        if not batch: break
+        
+        for t in batch:
+            if not isinstance(t, dict): continue
+            uid = str(t.get('RESPONSIBLE_ID','0'))
+            if uid == '0': continue
+            st = str(t.get('STATUS','?'))
+            real = str(t.get('REAL_STATUS','?'))
+            key = f"STATUS={st}, REAL_STATUS={real}"
+            if key not in statuses: statuses[key] = []
+            statuses[key].append(t.get('TITLE','')[:50])
+        
+        start += 50
+        if start >= 1000: break
+    
+    result = {}
+    for k, v in statuses.items():
+        result[k] = len(v)
+    
+    return jsonify({"total_tasks": sum(result.values()), "statuses": result, "examples": {k: v[:2] for k, v in statuses.items()}})
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
