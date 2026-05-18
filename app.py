@@ -251,6 +251,9 @@ def run_daily_audit():
         
         TASKS_URL = os.environ.get('BITRIX_TASKS_WEBHOOK_URL', '')
         
+        def fmt_rub(amount):
+            return f"{amount:,.0f}".replace(",", " ")
+        
         users = {}
         def get_user_name(uid):
             if not uid or uid == '0': return 'Не назначен'
@@ -284,7 +287,7 @@ def run_daily_audit():
             })
             leads = leads_resp.get('result', [])
             sum_leads = sum(float(l.get('OPPORTUNITY') or 0) for l in leads)
-            msgs.append(f"🔹 <b>Лиды в работе:</b> {len(leads)} шт. на {sum_leads:,.0f} руб.")
+            msgs.append(f"🔹 <b>Лиды в работе:</b> {len(leads)} шт. на {fmt_rub(sum_leads)} руб.")
         except Exception as e:
             msgs.append(f"🔹 Лиды: ошибка — {str(e)[:80]}")
         
@@ -292,7 +295,7 @@ def run_daily_audit():
         try:
             deals_resp = bitrix_api("crm.deal.list.json", {
                 "filter": {"!STAGE_ID": "WON"},
-                "select": ["ID", "TITLE", "STAGE_ID", "OPPORTUNITY", "CLOSEDATE", "DATE_MODIFY"]
+                "select": ["ID", "TITLE", "STAGE_ID", "OPPORTUNITY", "CLOSEDATE"]
             })
             deals = deals_resp.get('result', [])
             
@@ -310,9 +313,9 @@ def run_daily_audit():
             sum_work = sum(float(d.get('OPPORTUNITY') or 0) for d in in_work)
             sum_lost = sum(float(d.get('OPPORTUNITY') or 0) for d in lost_today)
             
-            msgs.append(f"📊 <b>Сделки в работе:</b> {len(in_work)} шт. на {sum_work:,.0f} руб.")
+            msgs.append(f"📊 <b>Сделки в работе:</b> {len(in_work)} шт. на {fmt_rub(sum_work)} руб.")
             if lost_today:
-                msgs.append(f"   ❌ <b>Провалено сегодня:</b> {len(lost_today)} шт. на {sum_lost:,.0f} руб.")
+                msgs.append(f"   ❌ <b>Провалено сегодня:</b> {len(lost_today)} шт. на {fmt_rub(sum_lost)} руб.")
         except Exception as e:
             msgs.append(f"📊 Сделки: ошибка — {str(e)[:80]}")
         
@@ -339,7 +342,7 @@ def run_daily_audit():
         except Exception as e:
             msgs.append(f"\n📦 Производство: ошибка — {str(e)[:80]}")
         
-            # --- ЗАДАЧИ ---
+        # --- ЗАДАЧИ ---
         try:
             if TASKS_URL:
                 WORK_STATUSES = {'-1', '-2', '-3', '2', '3'}
@@ -397,21 +400,16 @@ def run_daily_audit():
                         msgs.append(f"   • {name}: {data['overdue']} просрочено")
         except Exception as e:
             msgs.append(f"\n📋 Задачи: ошибка — {str(e)[:80]}")
-
-                # --- ОСТАТКИ ПО СКЛАДАМ ---
+        
+        # --- ОСТАТКИ ПО СКЛАДАМ ---
         try:
-            # Получаем все остатки
-            store_resp = bitrix_api("catalog.storeproduct.list.json", {
-                "select": ["PRODUCT_ID", "STORE_ID", "AMOUNT"]
-            })
+            store_resp = bitrix_api("catalog.storeproduct.list.json")
             products = store_resp.get('result', {}).get('storeProducts', [])
             
             if products:
-                # Собираем уникальные ID товаров и складов
                 product_ids = set(p['productId'] for p in products if p.get('amount'))
                 store_ids = set(p['storeId'] for p in products if p.get('amount'))
                 
-                # Получаем названия товаров
                 product_names = {}
                 for pid in product_ids:
                     try:
@@ -420,7 +418,6 @@ def run_daily_audit():
                     except:
                         product_names[str(pid)] = f'Товар {pid}'
                 
-                # Получаем названия складов
                 store_names = {}
                 try:
                     s_resp = bitrix_api("catalog.store.list.json")
@@ -429,7 +426,6 @@ def run_daily_audit():
                 except:
                     pass
                 
-                # Группируем: товар → склад → остаток
                 by_product = {}
                 for p in products:
                     amt = p.get('amount')
@@ -446,54 +442,49 @@ def run_daily_audit():
                     for pid, stores in sorted(by_product.items()):
                         name = product_names.get(pid, f'Товар {pid}')
                         total = sum(stores.values())
-                        details = ", ".join([f"{store_names.get(sid, sid)}: {amt:.1f}" for sid, amt in stores.items()])
-                        msgs.append(f"   • {name}: {total:.1f} ({details})")
+                        details = ", ".join([f"{store_names.get(sid, sid)}: {fmt_rub(amt)}" for sid, amt in stores.items()])
+                        msgs.append(f"   • {name}: {fmt_rub(total)} ({details})")
         except Exception as e:
             msgs.append(f"\n📦 Остатки: ошибка — {str(e)[:80]}")
-              
-                      # --- ИИ-анализ ---
+        
+        # --- ИИ-анализ ---
         try:
             raw_text = "\n".join(msgs)
             
             models = [
                 "google/gemma-4-31b-it:free",
                 "meta-llama/llama-3.3-70b-instruct:free",
-                "qwen/qwen3-next-80b-a3b-instruct:free"
+                "qwen/qwen3-next-80b-a3b-instruct:free",
+                "meta-llama/llama-3.2-3b-instruct:free"
             ]
             
             ai_report = None
             for model in models:
-                for attempt in range(3):
-                    try:
-                        ai_resp = requests.post(
-                            "https://openrouter.ai/api/v1/chat/completions",
-                            headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"},
-                            json={
-                                "model": model,
-                                "messages": [
-                                    {"role": "user", "content": f"Напиши краткий вывод на русском (2-3 предложения): что хуже всего в этих данных, на что обратить внимание.\n\n{raw_text[:800]}"}
-                                ],
-                                "max_tokens": 300,
-                                "temperature": 0.5
-                            },
-                            timeout=30
-                        ).json()
-                        
-                        ai_report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', '')
-                        if ai_report:
-                            break
-                    except:
-                        pass
-                    time.sleep(3)
-                
-                if ai_report:
-                    break
-                time.sleep(5)
+                time.sleep(10)
+                try:
+                    ai_resp = requests.post(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"},
+                        json={
+                            "model": model,
+                            "messages": [
+                                {"role": "user", "content": f"Напиши краткий вывод на русском (2-3 предложения): что хуже всего в этих данных, на что обратить внимание.\n\n{raw_text[:800]}"}
+                            ],
+                            "max_tokens": 300,
+                            "temperature": 0.5
+                        },
+                        timeout=30
+                    ).json()
+                    
+                    ai_report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', '')
+                    if ai_report:
+                        msgs.append(f"\n\n🤖 <b>ИИ ({model}):</b>\n{ai_report}")
+                        break
+                except:
+                    pass
             
-            if ai_report:
-                msgs.append(f"\n\n🤖 <b>ИИ:</b>\n{ai_report}")
-            else:
-                msgs.append(f"\n\n⚠️ Все модели ИИ недоступны (лимит). Попробуйте позже.")
+            if not ai_report:
+                msgs.append(f"\n\n⚠️ Все модели ИИ недоступны. Попробуйте позже.")
         except Exception as e:
             msgs.append(f"\n\n⚠️ Ошибка ИИ: {str(e)[:200]}")
         
