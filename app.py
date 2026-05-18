@@ -245,53 +245,77 @@ def daily_audit_route():
 def run_daily_audit():
     import traceback
     try:
-        send_telegram("1/5 Старт")
+        send_telegram("🟢 Старт аудита")
         
         tz = pytz.timezone(TIMEZONE)
         now = datetime.now(tz)
-        today_start = now.strftime('%Y-%m-%d')
-        
-        send_telegram(f"2/5 Дата: {today_start}")
         
         logs = []
         
-        # Сбор сделок
+        # --- 1. Сделки в работе по стадиям ---
         try:
             deals_resp = bitrix_api("crm.deal.list.json", {
-                "filter": {">=DATE_MODIFY": today_start},
-                "select": ["ID", "TITLE", "STAGE_ID", "OPPORTUNITY", "CONTACT_ID", "COMPANY_ID"]
+                "filter": {"!STAGE_ID": "WON"},  # Исключаем закрытые (выигранные)
+                "select": ["ID", "TITLE", "STAGE_ID", "OPPORTUNITY", "ASSIGNED_BY_ID"]
             })
             deals = deals_resp.get('result', [])
-            logs.append(f"=== СДЕЛКИ ({len(deals)}) ===")
+            
+            # Группируем по стадиям
+            stages = {}
+            total_sum = 0
             for deal in deals:
-                logs.append(
-                    f"[Сделка #{deal['ID']}] {deal['TITLE']} | "
-                    f"Стадия: {deal.get('STAGE_ID')} | Сумма: {deal.get('OPPORTUNITY')} | "
-                    f"Контакт: {deal.get('CONTACT_ID', 'нет')} | Компания: {deal.get('COMPANY_ID', 'нет')}"
-                )
-            send_telegram(f"3/5 Сделок: {len(deals)}")
+                stage = deal.get('STAGE_ID', 'Неизвестно')
+                opp = float(deal.get('OPPORTUNITY') or 0)
+                total_sum += opp
+                if stage not in stages:
+                    stages[stage] = {"count": 0, "sum": 0}
+                stages[stage]["count"] += 1
+                stages[stage]["sum"] += opp
+            
+            logs.append(f"=== СДЕЛКИ В РАБОТЕ: {len(deals)} шт., общая сумма: {total_sum:,.0f} руб. ===")
+            for stage, data in sorted(stages.items()):
+                logs.append(f"• {stage}: {data['count']} сделок, {data['sum']:,.0f} руб.")
+            
+            send_telegram(f"📊 Сделок в работе: {len(deals)}, сумма: {total_sum:,.0f} руб.")
+            
         except Exception as e:
-            send_telegram(f"Ошибка сделок: {e}")
+            logs.append(f"⚠️ Ошибка сделок: {e}")
         
-        # Сбор задач
+        # --- 2. Задачи в разрезе сотрудников ---
         try:
             tasks_resp = bitrix_api("tasks.task.list.json", {
-                "filter": {">=CHANGED_DATE": today_start},
-                "select": ["ID", "TITLE", "STATUS", "RESPONSIBLE_ID"]
+                "filter": {"REAL_STATUS": "2"},  # 2 = в работе (не завершены)
+                "select": ["ID", "TITLE", "RESPONSIBLE_ID", "DEADLINE", "CREATED_DATE"]
             })
             tasks = tasks_resp.get('result', {}).get('tasks', [])
-            logs.append(f"\n=== ЗАДАЧИ ({len(tasks)}) ===")
+            
+            # Группируем по сотрудникам
+            employees = {}
+            overdue_count = 0
             for task in tasks:
-                logs.append(
-                    f"[Задача #{task['ID']}] {task['TITLE']} | "
-                    f"Статус: {task.get('STATUS')} | Ответственный: {task.get('RESPONSIBLE_ID')}"
-                )
-            send_telegram(f"4/5 Задач: {len(tasks)}")
+                emp = f"User {task.get('RESPONSIBLE_ID', '?')}"
+                deadline = task.get('DEADLINE', '')
+                
+                if emp not in employees:
+                    employees[emp] = {"total": 0, "overdue": 0}
+                employees[emp]["total"] += 1
+                
+                # Проверка просрочки
+                if deadline and deadline < now.strftime('%Y-%m-%d'):
+                    employees[emp]["overdue"] += 1
+                    overdue_count += 1
+            
+            logs.append(f"\n=== ЗАДАЧИ В РАБОТЕ: {len(tasks)} шт., просрочено: {overdue_count} ===")
+            for emp, data in sorted(employees.items(), key=lambda x: x[1]['total'], reverse=True):
+                logs.append(f"• {emp}: {data['total']} задач, просрочено: {data['overdue']}")
+            
+            send_telegram(f"📋 Задач в работе: {len(tasks)}, просрочено: {overdue_count}")
+            
         except Exception as e:
-            send_telegram(f"Ошибка задач: {e}")
+            logs.append(f"⚠️ Ошибка задач: {e}")
         
-        # ИИ
-        send_telegram("5/5 Запрос к ИИ...")
+        # --- 3. ИИ ---
+        send_telegram("🤖 Запрос к ИИ...")
         raw_text = anonymize_text("\n".join(logs))
         
         ai_resp = requests.post(
@@ -300,18 +324,18 @@ def run_daily_audit():
             json={
                 "model": "google/gemma-4-31b-it:free",
                 "messages": [
-                    {"role": "system", "content": "You are a corporate auditor. Analyze CRM data and write a short report in Russian with sections: 1. CRM ERRORS, 2. CONFLICTS, 3. ACHIEVEMENTS. Be specific with IDs."},
-                    {"role": "user", "content": f"Date: {now.strftime('%d.%m.%Y')}\n\n{raw_text[:5000]}"}
+                    {"role": "system", "content": "You are an analyst. Write a short report in Russian based on CRM data. Summarize: 1) how many deals are in progress, total amount, which stages have most deals. 2) how many tasks are open, who has the most, how many overdue. Be specific with numbers."},
+                    {"role": "user", "content": raw_text[:5000]}
                 ],
-                "max_tokens": 2000,
-                "temperature": 0.5
+                "max_tokens": 1500,
+                "temperature": 0.3
             },
             timeout=120
         ).json()
         
-        report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', 'Нет ответа от ИИ')
+        report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', 'Нет ответа')
         
-        header = f"📊 <b>ОТЧЁТ ЗА {now.strftime('%d.%m.%Y')}</b>\n\n"
+        header = f"📊 <b>ОТЧЁТ НА {now.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
         footer = "\n\n<i>Invisible Audit</i>"
         send_telegram(header + report[:3500] + footer)
         
