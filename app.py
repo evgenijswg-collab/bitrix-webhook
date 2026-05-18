@@ -339,9 +339,12 @@ def run_daily_audit():
         except Exception as e:
             msgs.append(f"\n📦 Производство: ошибка — {str(e)[:80]}")
         
-      # --- ЗАДАЧИ (постраничная загрузка) ---
+               # --- ЗАДАЧИ (как в BI: исключаем только STATUS=5,6,7) ---
         try:
             if TASKS_URL:
+                # Статусы "в работе": все кроме 5 (завершена), 6 (закрыта), 7 (отменена)
+                WORK_STATUSES = {'-1', '-2', '-3', '2', '3', '4'}
+                
                 employees = {}
                 start = 0
                 while True:
@@ -359,7 +362,7 @@ def run_daily_audit():
                         if not isinstance(t, dict):
                             continue
                         status = str(t.get('STATUS', ''))
-                        if status in ('5', '6', '7'):
+                        if status not in WORK_STATUSES:
                             continue
                         
                         uid = str(t.get('RESPONSIBLE_ID', '0'))
@@ -374,8 +377,7 @@ def run_daily_audit():
                             employees[uid]["overdue"] += 1
                     
                     start += 50
-                    # Ограничение: максимум 10 страниц = 500 задач
-                    if start >= 500:
+                    if start >= 1000:
                         break
                 
                 total_t = sum(e['total'] for e in employees.values())
