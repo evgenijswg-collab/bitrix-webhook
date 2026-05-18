@@ -243,115 +243,34 @@ def daily_audit_route():
 
 
 def run_daily_audit():
-    """Основная функция аудита за текущий день"""
     try:
+        send_telegram("🟢 Старт аудита")
+        
         tz = pytz.timezone(TIMEZONE)
         now = datetime.now(tz)
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-
-        logs = []
-
-        # --- 1. Сбор лидов ---
-        try:
-            leads_resp = bitrix_api("crm.lead.list.json", {
-                "filter": {">=DATE_MODIFY": today_start},
-                "select": ["ID", "TITLE", "STATUS_ID", "ASSIGNED_BY_ID", "CONTACT_ID", "COMPANY_ID"]
-            })
-            leads = leads_resp.get('result', [])
-            logs.append(f"=== ЛИДЫ (изменено: {len(leads)}) ===")
-            for lead in leads:
-                logs.append(
-                    f"[Лид #{lead.get('id')}] {lead.get('title')} | "
-                    f"Статус: {lead.get('statusId')} | "
-                    f"Контакт: {lead.get('contactId', 'нет')} | Компания: {lead.get('companyId', 'нет')}"
-                )
-        except Exception as e:
-            logs.append(f"⚠️ Ошибка сбора лидов: {str(e)[:200]}")
-
-        # --- 2. Сбор сделок ---
-        try:
-            deals_resp = bitrix_api("crm.deal.list.json", {
-                "filter": {">=DATE_MODIFY": today_start},
-                "select": ["ID", "TITLE", "STAGE_ID", "ASSIGNED_BY_ID", "OPPORTUNITY", "CONTACT_ID", "COMPANY_ID"]
-            })
-            deals = deals_resp.get('result', [])
-            logs.append(f"\n=== СДЕЛКИ (изменено: {len(deals)}) ===")
-            for deal in deals:
-                logs.append(
-                    f"[Сделка #{deal.get('id')}] {deal.get('title')} | "
-                    f"Стадия: {deal.get('stageId')} | Сумма: {deal.get('opportunity')} | "
-                    f"Контакт: {deal.get('contactId', 'нет')} | Компания: {deal.get('companyId', 'нет')}"
-                )
-        except Exception as e:
-            logs.append(f"⚠️ Ошибка сбора сделок: {str(e)[:200]}")
-
-        # --- 3. Сбор задач и комментариев ---
-        try:
-            tasks_resp = bitrix_api("tasks.task.list.json", {
-                "filter": {">=CHANGED_DATE": today_start},
-                "select": ["ID", "TITLE", "STATUS", "RESPONSIBLE_ID", "CREATED_BY", "DESCRIPTION"]
-            })
-            tasks = tasks_resp.get('result', {}).get('tasks', [])
-            logs.append(f"\n=== ЗАДАЧИ (изменено: {len(tasks)}) ===")
-
-            for task in tasks:
-                task_id = task.get('id')
-                logs.append(
-                    f"[Задача #{task_id}] {task.get('title')} | "
-                    f"Статус: {task.get('status')} | Ответственный: {task.get('responsibleId')}"
-                )
-
-                # Комментарии к задаче
-                try:
-                    comments_resp = bitrix_api("task.commentitem.getlist.json", {
-                        "TASKID": task_id,
-                        "select": ["ID", "AUTHOR_ID", "POST_MESSAGE", "CREATED_DATE"]
-                    })
-                    comments = comments_resp.get('result', [])
-                    for comment in comments:
-                        if isinstance(comment, dict):
-                            msg = comment.get('POST_MESSAGE', '')
-                            logs.append(f"  ↳ Комментарий (user {comment.get('AUTHOR_ID')}): {msg[:300]}")
-                except:
-                    pass
-        except Exception as e:
-            logs.append(f"⚠️ Ошибка сбора задач: {str(e)[:200]}")
-
-        # --- 4. Обезличивание ---
-        raw_text = "\n".join(logs)
-        clean_text = anonymize_text(raw_text)
-
-        # --- 5. Отправка в ИИ ---
-        system_prompt = """Ты — беспристрастный корпоративный аудитор. Твоя задача — изучить сырые логи из Битрикс24 за сегодня и составить для директора краткий, жесткий отчет без "воды".
-Проанализируй данные по разделам:
-1. СБОИ В РАБОТЕ С CRM: Кто завел Лид/Сделку без контактов? Какие обязательные поля (ИНН, сумма, файлы) пропущены, несмотря на закрытые авто-задачи по ним? Что "зависло"?
-2. МАНЕРА ПЕРЕПИСКИ И КОНФЛИКТЫ: Найди признаки агрессии, токсичности, капслока или споров в задачах. Кто перекладывал ответственность вместо решения проблемы?
-3. ПРОБЛЕМЫ И СПОТЫКАНИЯ: На каких этапах сотрудники буксуют и затягивают сроки (пишут "не знаю как", часами ждут другие отделы)?
-4. ГЛАВНЫЕ ДОСТИЖЕНИЯ: Кто проявил инициативу или закрыл крупный чек без косяков?
-Формат отчета: только факты, имена сотрудников, номера задач/сделок и суть. Если проблем по пункту нет — пропускай раздел."""
-
-        try:
-            ai_resp = requests.post(
-                AI_API_URL,
-                headers={
-                    "Authorization": f"Bearer {AI_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": AI_MODEL,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": f"Логи за сегодня ({now.strftime('%d.%m.%Y')}):\n\n{clean_text[:50000]}"}
-                    ],
-                    "temperature": 0.7,
-                    "max_tokens": 3000
-                },
-                timeout=120
-            ).json()
-
-            report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', 'Не удалось получить отчёт от ИИ')
-        except Exception as e:
-            report = f"⚠️ Ошибка при обращении к ИИ: {str(e)[:300]}"
+        
+        # Тест ИИ
+        ai_resp = requests.post(
+            AI_API_URL,
+            headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": AI_MODEL,
+                "messages": [
+                    {"role": "system", "content": "Ты аудитор. Составь краткий тестовый отчёт."},
+                    {"role": "user", "content": f"Сегодня {now.strftime('%d.%m.%Y')}. Сделок: 3, Задач: 5. Всё в порядке."}
+                ],
+                "max_tokens": 500
+            },
+            timeout=60
+        ).json()
+        
+        report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', 'Нет ответа')
+        
+        send_telegram(f"📊 Тестовый отчёт:\n\n{report}")
+        
+    except Exception as e:
+        send_telegram(f"❌ Ошибка: {str(e)}")
 
         # --- 6. Отправка в Telegram ---
         header = f"📊 <b>ОТЧЁТ ЗА {now.strftime('%d.%m.%Y')}</b>\n\n"
