@@ -575,7 +575,7 @@ def run_monthly_audit():
                         msgs.append(f"   • {name}: создано {data['total']}, закрыто {data['closed']}, просрочено {data['overdue_closed']}")
         except Exception as e:
             msgs.append(f"\n📋 Задачи: ошибка — {str(e)[:80]}")
-                                  # --- ТОВАРОДВИЖЕНИЕ ЗА МЕСЯЦ ---
+                                         # --- ТОВАРОДВИЖЕНИЕ ЗА МЕСЯЦ ---
         try:
             doc_resp = bitrix_api("catalog.document.list.json", {
                 "filter": {">=dateCreate": month_start, "<=dateCreate": today},
@@ -603,6 +603,9 @@ def run_monthly_audit():
                 for item in items:
                     product_id = str(item.get('elementId', ''))
                     quantity = float(item.get('amount') or 0)
+                    store_from = item.get('storeFrom')  # Откуда
+                    store_to = item.get('storeTo')      # Куда
+                    
                     if not product_id or quantity <= 0:
                         continue
                     
@@ -615,27 +618,32 @@ def run_monthly_audit():
                     
                     name = product_names[product_id]
                     
-                    if doc_type in ('A', 'S'):
+                    # Определяем тип движения по storeFrom / storeTo
+                    if store_to and not store_from:
+                        # Поступление на склад
                         incoming[name] = incoming.get(name, 0) + quantity
-                    elif doc_type == 'M':
-                        to_production[name] = to_production.get(name, 0) + quantity
-                    elif doc_type == 'R':
+                    elif store_from and not store_to:
+                        # Отгрузка со склада (реализация)
                         shipped[name] = shipped.get(name, 0) + quantity
+                    elif store_from and store_to:
+                        # Перемещение между складами
+                        to_production[name] = to_production.get(name, 0) + quantity
                     elif doc_type == 'D':
+                        # Списание (может быть без складов)
                         written_off[name] = written_off.get(name, 0) + quantity
             
             if incoming:
-                msgs.append(f"\n📥 <b>Принято на склад сырья:</b>")
+                msgs.append(f"\n📥 <b>Принято на склад:</b>")
                 for name, qty in sorted(incoming.items(), key=lambda x: x[1], reverse=True):
                     msgs.append(f"   • {name}: {qty:.1f} шт.")
             
             if to_production:
-                msgs.append(f"\n🏭 <b>Выдано в производство:</b>")
+                msgs.append(f"\n🏭 <b>Перемещено между складами:</b>")
                 for name, qty in sorted(to_production.items(), key=lambda x: x[1], reverse=True):
                     msgs.append(f"   • {name}: {qty:.1f} шт.")
             
             if shipped:
-                msgs.append(f"\n🚚 <b>Отгружено заказчикам:</b>")
+                msgs.append(f"\n🚚 <b>Отгружено со склада:</b>")
                 for name, qty in sorted(shipped.items(), key=lambda x: x[1], reverse=True):
                     msgs.append(f"   • {name}: {qty:.1f} шт.")
             
