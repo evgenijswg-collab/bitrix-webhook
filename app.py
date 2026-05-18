@@ -250,17 +250,18 @@ def run_daily_audit():
         tz = pytz.timezone(TIMEZONE)
         now = datetime.now(tz)
         
+        TASKS_URL = os.environ.get('BITRIX_TASKS_WEBHOOK_URL', '')
+        
         logs = []
         
-        # --- 1. Сделки в работе по стадиям ---
+        # --- 1. Сделки в работе ---
         try:
             deals_resp = bitrix_api("crm.deal.list.json", {
-                "filter": {"!STAGE_ID": "WON"},  # Исключаем закрытые (выигранные)
-                "select": ["ID", "TITLE", "STAGE_ID", "OPPORTUNITY", "ASSIGNED_BY_ID"]
+                "filter": {"!STAGE_ID": "WON"},
+                "select": ["ID", "TITLE", "STAGE_ID", "OPPORTUNITY"]
             })
             deals = deals_resp.get('result', [])
             
-            # Группируем по стадиям
             stages = {}
             total_sum = 0
             for deal in deals:
@@ -272,50 +273,50 @@ def run_daily_audit():
                 stages[stage]["count"] += 1
                 stages[stage]["sum"] += opp
             
-            logs.append(f"=== СДЕЛКИ В РАБОТЕ: {len(deals)} шт., общая сумма: {total_sum:,.0f} руб. ===")
+            logs.append(f"=== СДЕЛКИ В РАБОТЕ: {len(deals)} шт., {total_sum:,.0f} руб. ===")
             for stage, data in sorted(stages.items()):
                 logs.append(f"• {stage}: {data['count']} сделок, {data['sum']:,.0f} руб.")
             
-            send_telegram(f"📊 Сделок в работе: {len(deals)}, сумма: {total_sum:,.0f} руб.")
-            
+            send_telegram(f"📊 Сделок: {len(deals)}, сумма: {total_sum:,.0f} руб.")
         except Exception as e:
             logs.append(f"⚠️ Ошибка сделок: {e}")
         
-        # --- 2. Задачи в разрезе сотрудников ---
+        # --- 2. Задачи через отдельный вебхук ---
         try:
-            tasks_resp = bitrix_api("tasks.task.list.json", {
-                "filter": {"REAL_STATUS": "2"},  # 2 = в работе (не завершены)
-                "select": ["ID", "TITLE", "RESPONSIBLE_ID", "DEADLINE", "CREATED_DATE"]
-            })
-            tasks = tasks_resp.get('result', {}).get('tasks', [])
-            
-            # Группируем по сотрудникам
-            employees = {}
-            overdue_count = 0
-            for task in tasks:
-                emp = f"User {task.get('RESPONSIBLE_ID', '?')}"
-                deadline = task.get('DEADLINE', '')
+            if TASKS_URL:
+                tasks_resp = requests.post(
+                    f"{TASKS_URL}task.item.list.json",
+                    json={"order": {"ID": "desc"}},
+                    timeout=10
+                ).json()
                 
-                if emp not in employees:
-                    employees[emp] = {"total": 0, "overdue": 0}
-                employees[emp]["total"] += 1
+                tasks = tasks_resp.get('result', [])
                 
-                # Проверка просрочки
-                if deadline and deadline < now.strftime('%Y-%m-%d'):
-                    employees[emp]["overdue"] += 1
-                    overdue_count += 1
-            
-            logs.append(f"\n=== ЗАДАЧИ В РАБОТЕ: {len(tasks)} шт., просрочено: {overdue_count} ===")
-            for emp, data in sorted(employees.items(), key=lambda x: x[1]['total'], reverse=True):
-                logs.append(f"• {emp}: {data['total']} задач, просрочено: {data['overdue']}")
-            
-            send_telegram(f"📋 Задач в работе: {len(tasks)}, просрочено: {overdue_count}")
-            
+                employees = {}
+                overdue_count = 0
+                for task in tasks:
+                    if isinstance(task, dict):
+                        emp = f"User {task.get('RESPONSIBLE_ID', '?')}"
+                        deadline = task.get('DEADLINE', '')
+                        
+                        if emp not in employees:
+                            employees[emp] = {"total": 0, "overdue": 0}
+                        employees[emp]["total"] += 1
+                        
+                        if deadline and deadline < now.strftime('%Y-%m-%d'):
+                            employees[emp]["overdue"] += 1
+                            overdue_count += 1
+                
+                logs.append(f"\n=== ЗАДАЧИ: {len(tasks)} шт., просрочено: {overdue_count} ===")
+                for emp, data in sorted(employees.items(), key=lambda x: x[1]['total'], reverse=True):
+                    logs.append(f"• {emp}: {data['total']} задач, просрочено: {data['overdue']}")
+                
+                send_telegram(f"📋 Задач: {len(tasks)}, просрочено: {overdue_count}")
         except Exception as e:
             logs.append(f"⚠️ Ошибка задач: {e}")
         
         # --- 3. ИИ ---
-        send_telegram("🤖 Запрос к ИИ...")
+        send_telegram("🤖 ИИ...")
         raw_text = anonymize_text("\n".join(logs))
         
         ai_resp = requests.post(
@@ -323,12 +324,8 @@ def run_daily_audit():
             headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"},
             json={
                 "model": "google/gemma-4-31b-it:free",
-                "messages": [
-                    {"role": "system", "content": "You are an analyst. Write a short report in Russian based on CRM data. Summarize: 1) how many deals are in progress, total amount, which stages have most deals. 2) how many tasks are open, who has the most, how many overdue. Be specific with numbers."},
-                    {"role": "user", "content": raw_text[:5000]}
-                ],
-                "max_tokens": 1500,
-                "temperature": 0.3
+                "messages": [{"role": "user", "content": f"Напиши краткий отчёт на русском:\n\n{raw_text[:4000]}"}],
+                "max_tokens": 1500
             },
             timeout=120
         ).json()
@@ -336,12 +333,10 @@ def run_daily_audit():
         report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', 'Нет ответа')
         
         header = f"📊 <b>ОТЧЁТ НА {now.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
-        footer = "\n\n<i>Invisible Audit</i>"
-        send_telegram(header + report[:3500] + footer)
+        send_telegram(header + report[:3500])
         
     except Exception as e:
         send_telegram(f"❌ Крах: {traceback.format_exc()[:1000]}")
-
         # --- 6. Отправка в Telegram ---
         header = f"📊 <b>ОТЧЁТ ЗА {now.strftime('%d.%m.%Y')}</b>\n\n"
         footer = "\n\n<i>Invisible Audit</i>"
