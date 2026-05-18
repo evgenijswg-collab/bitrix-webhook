@@ -454,7 +454,41 @@ def run_monthly_audit():
         def fmt_rub(amount):
             return f"{amount:,.0f}".replace(",", " ")
 
+        users = {}
+        def get_user_name(uid):
+            if not uid or uid == '0': return 'Не назначен'
+            uid = str(uid)
+            if uid not in users:
+                try:
+                    resp = requests.post(f"{WEBHOOK_URL}user.get.json", json={"ID": int(uid)}, timeout=5).json()
+                    user = resp.get('result', [{}])[0]
+                    users[uid] = f"{user.get('NAME','')} {user.get('LAST_NAME','')}".strip() or f"User {uid}"
+                except:
+                    users[uid] = f"User {uid}"
+            return users[uid]
+
         msgs = [f"📅 <b>ОТЧЁТ ЗА {now.strftime('%B %Y').upper()}</b>\n"]
+
+        # --- ЛИДЫ ЗА МЕСЯЦ ---
+        try:
+            leads_resp = bitrix_api("crm.lead.list.json", {
+                "filter": {">=DATE_CREATE": month_start, "<=DATE_CREATE": today},
+                "select": ["ID", "TITLE", "STATUS_ID", "OPPORTUNITY"]
+            })
+            leads = leads_resp.get('result', [])
+            converted = [l for l in leads if l.get('STATUS_ID') == 'CONVERTED']
+            junk = [l for l in leads if l.get('STATUS_ID') == 'JUNK']
+            active = [l for l in leads if l.get('STATUS_ID') not in ('CONVERTED', 'JUNK')]
+            sum_converted = sum(float(l.get('OPPORTUNITY') or 0) for l in converted)
+            sum_junk = sum(float(l.get('OPPORTUNITY') or 0) for l in junk)
+            msgs.append(f"🔹 <b>Лиды за месяц:</b>")
+            msgs.append(f"   • Создано: {len(leads)} шт.")
+            msgs.append(f"   ✅ Перешло в сделку: {len(converted)} шт. на {fmt_rub(sum_converted)} руб.")
+            msgs.append(f"   ❌ Провалено: {len(junk)} шт. на {fmt_rub(sum_junk)} руб.")
+            if active:
+                msgs.append(f"   🔄 В работе: {len(active)} шт.")
+        except Exception as e:
+            msgs.append(f"🔹 Лиды: ошибка — {str(e)[:80]}")
 
         # --- СДЕЛКИ ЗА МЕСЯЦ ---
         try:
@@ -469,7 +503,7 @@ def run_monthly_audit():
             sum_won = sum(float(d.get('OPPORTUNITY') or 0) for d in won)
             sum_lost = sum(float(d.get('OPPORTUNITY') or 0) for d in lost)
             sum_work = sum(float(d.get('OPPORTUNITY') or 0) for d in in_work)
-            msgs.append(f"📊 <b>Сделки за месяц:</b>")
+            msgs.append(f"\n📊 <b>Сделки за месяц:</b>")
             msgs.append(f"   • Создано: {len(deals)} шт.")
             msgs.append(f"   ✅ Успешно: {len(won)} шт. на {fmt_rub(sum_won)} руб.")
             msgs.append(f"   ❌ Провалено: {len(lost)} шт. на {fmt_rub(sum_lost)} руб.")
@@ -477,11 +511,13 @@ def run_monthly_audit():
         except Exception as e:
             msgs.append(f"📊 Сделки: ошибка — {str(e)[:80]}")
 
-        # --- ЗАДАЧИ ЗА МЕСЯЦ ---
+        # --- ЗАДАЧИ ЗА МЕСЯЦ (общая + по сотрудникам) ---
         try:
             if TASKS_URL:
-                closed = 0
-                overdue_closed = 0
+                total_created = 0
+                total_closed = 0
+                total_overdue_closed = 0
+                employees = {}
                 start = 0
                 while True:
                     tasks_resp = requests.post(
@@ -495,21 +531,85 @@ def run_monthly_audit():
                     for t in batch:
                         if not isinstance(t, dict):
                             continue
+                        created_date = (t.get('CREATED_DATE', '') or '')[:10]
                         status = str(t.get('STATUS', ''))
                         closed_date = (t.get('CLOSED_DATE', '') or '')[:10]
+                        uid = str(t.get('RESPONSIBLE_ID', '0'))
+                        deadline = (t.get('DEADLINE', '') or '')[:10]
+
+                        # Создано за месяц
+                        if created_date >= month_start:
+                            total_created += 1
+
+                        # Закрыто за месяц
                         if status == '5' and closed_date >= month_start:
-                            closed += 1
-                            deadline = (t.get('DEADLINE', '') or '')[:10]
+                            total_closed += 1
                             if deadline and deadline < closed_date:
-                                overdue_closed += 1
+                                total_overdue_closed += 1
+
+                        # По сотрудникам: все задачи за месяц (созданные ИЛИ закрытые)
+                        if uid != '0' and (created_date >= month_start or (status == '5' and closed_date >= month_start)):
+                            if uid not in employees:
+                                employees[uid] = {"total": 0, "closed": 0, "overdue_closed": 0}
+                            if created_date >= month_start:
+                                employees[uid]["total"] += 1
+                            if status == '5' and closed_date >= month_start:
+                                employees[uid]["closed"] += 1
+                                if deadline and deadline < closed_date:
+                                    employees[uid]["overdue_closed"] += 1
+
                     start += 50
                     if start >= 1000:
                         break
+
                 msgs.append(f"\n📋 <b>Задачи за месяц:</b>")
-                msgs.append(f"   • Закрыто задач: {closed}")
-                msgs.append(f"   • Закрыто с просрочкой: {overdue_closed}")
+                msgs.append(f"   • Создано: {total_created} шт.")
+                msgs.append(f"   • Закрыто: {total_closed} шт.")
+                msgs.append(f"   • Закрыто с просрочкой: {total_overdue_closed} шт.")
+
+                if employees:
+                    msgs.append(f"\n📋 <b>Задачи по сотрудникам:</b>")
+                    sorted_emp = sorted(employees.items(), key=lambda x: x[1]['total'], reverse=True)
+                    for uid, data in sorted_emp:
+                        name = get_user_name(uid)
+                        msgs.append(f"   • {name}: создано {data['total']}, закрыто {data['closed']}, просрочено {data['overdue_closed']}")
         except Exception as e:
             msgs.append(f"\n📋 Задачи: ошибка — {str(e)[:80]}")
+
+        # --- ИИ-анализ (месяц) ---
+        try:
+            raw_text = "\n".join(msgs)
+            models = [
+                "google/gemma-4-31b-it:free",
+                "meta-llama/llama-3.3-70b-instruct:free",
+                "qwen/qwen3-next-80b-a3b-instruct:free",
+                "meta-llama/llama-3.2-3b-instruct:free"
+            ]
+            ai_report = None
+            for model in models:
+                time.sleep(10)
+                try:
+                    ai_resp = requests.post(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"},
+                        json={
+                            "model": model,
+                            "messages": [{"role": "user", "content": f"Напиши краткий вывод на русском (2-3 предложения) по итогам месяца: что хорошо, что плохо, какие тренды.\n\n{raw_text[:800]}"}],
+                            "max_tokens": 300,
+                            "temperature": 0.5
+                        },
+                        timeout=30
+                    ).json()
+                    ai_report = ai_resp.get('choices', [{}])[0].get('message', {}).get('content', '')
+                    if ai_report:
+                        msgs.append(f"\n\n🤖 <b>ИИ:</b>\n{ai_report}")
+                        break
+                except:
+                    pass
+            if not ai_report:
+                msgs.append(f"\n\n⚠️ ИИ недоступен.")
+        except Exception as e:
+            msgs.append(f"\n\n⚠️ Ошибка ИИ: {str(e)[:200]}")
 
         send_telegram("\n".join(msgs))
 
