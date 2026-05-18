@@ -339,11 +339,10 @@ def run_daily_audit():
         except Exception as e:
             msgs.append(f"\n📦 Производство: ошибка — {str(e)[:80]}")
         
-               # --- ЗАДАЧИ (как в BI: исключаем только STATUS=5,6,7) ---
+            # --- ЗАДАЧИ ---
         try:
             if TASKS_URL:
-                # Статусы "в работе": все кроме 5 (завершена), 6 (закрыта), 7 (отменена)
-                WORK_STATUSES = {'-1', '-2', '-3', '2', '3', '4'}
+                WORK_STATUSES = {'-1', '-2', '-3', '2', '3'}
                 
                 employees = {}
                 start = 0
