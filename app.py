@@ -595,7 +595,7 @@ def task_statuses():
     
     return jsonify({"total_tasks": sum(result.values()), "statuses": result, "examples": {k: v[:2] for k, v in statuses.items()}})
 # ============================================================
-# Telegram Webhook — команда /audit
+# Telegram Webhook — команда отчет
 # ============================================================
 @app.route('/telegram', methods=['POST'])
 def telegram_webhook():
@@ -605,7 +605,7 @@ def telegram_webhook():
         text = message.get('text', '')
         chat_id = message.get('chat', {}).get('id', '')
         
-        if text == '/audit' and chat_id:
+        if text and 'отчет' in text.lower() and chat_id:
             threading.Thread(target=run_daily_audit, daemon=True).start()
             send_telegram("🟢 Запускаю аудит... Отчёт придёт через минуту.")
         
