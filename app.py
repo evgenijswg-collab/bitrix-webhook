@@ -340,6 +340,7 @@ def run_daily_audit():
             msgs.append(f"\n📦 Производство: ошибка — {str(e)[:80]}")
         
         # --- ЗАДАЧИ ---
+                # --- ЗАДАЧИ ---
         try:
             if TASKS_URL:
                 tasks_resp = requests.post(f"{TASKS_URL}task.item.list.json", json={"order": {"ID": "desc"}}, timeout=15).json()
@@ -349,8 +350,10 @@ def run_daily_audit():
                 for t in all_tasks:
                     if not isinstance(t, dict):
                         continue
-                    # Только незавершённые: REAL_STATUS = 2 (ждёт) или 3 (в работе)
-                    if str(t.get('REAL_STATUS', '')) not in ('2', '3'):
+                    
+                    # Пропускаем только завершённые (STATUS=5) и закрытые (STATUS=6)
+                    status = str(t.get('STATUS', ''))
+                    if status in ('5', '6', '7'):
                         continue
                     
                     uid = str(t.get('RESPONSIBLE_ID', '0'))
@@ -374,7 +377,6 @@ def run_daily_audit():
                     name = get_user_name(uid)
                     msgs.append(f"   • {name}: {data['total']} задач, просрочено: {data['overdue']}")
                 
-                # Просроченные отдельно
                 overdue_emp = {uid: d for uid, d in employees.items() if d['overdue'] > 0}
                 if overdue_emp:
                     msgs.append(f"\n⚠️ <b>Просроченные задачи:</b>")
