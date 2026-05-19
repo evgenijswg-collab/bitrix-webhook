@@ -272,35 +272,79 @@ def run_daily_audit():
                         msgs.append(f"   • {get_user_name(uid)}: {data['overdue']} просрочено")
         except Exception as e: msgs.append(f"\n📋 Задачи: ошибка — {str(e)[:80]}")
 
-        # --- ОСТАТКИ ---
+                # --- ОСТАТКИ ПО СКЛАДАМ ---
         try:
-            products = bitrix_api("catalog.storeproduct.list.json").get('result', {}).get('storeProducts', [])
+            store_resp = bitrix_api("catalog.storeproduct.list.json")
+            products = store_resp.get('result', {}).get('storeProducts', [])
             if products:
-                product_ids = set(p['productId'] for p in products if p.get('amount'))
-                pnames = {}
-                for pid in product_ids:
-                    try: pnames[str(pid)] = bitrix_api("catalog.product.get.json", {"id": int(pid)}).get('result', {}).get('product', {}).get('name', f'Товар {pid}')
-                    except: pnames[str(pid)] = f'Товар {pid}'
-                snames = {}
+                # Названия товаров
+                product_names_local = {}
+                all_pids = set(str(p['productId']) for p in products if p.get('amount'))
+                for pid in all_pids:
+                    try:
+                        p_resp = bitrix_api("catalog.product.get.json", {"id": int(pid)})
+                        product_names_local[pid] = p_resp.get('result', {}).get('product', {}).get('name', f'Товар {pid}')
+                    except:
+                        product_names_local[pid] = f'Товар {pid}'
+                
+                # Названия складов
+                store_names = {}
                 try:
-                    for s in bitrix_api("catalog.store.list.json").get('result', {}).get('stores', []):
-                        snames[str(s['id'])] = s.get('title', f'Склад {s["id"]}')
-                except: pass
-                by_product = {}
+                    s_resp = bitrix_api("catalog.store.list.json")
+                    for s in s_resp.get('result', {}).get('stores', []):
+                        store_names[str(s['id'])] = s.get('title', f'Склад {s["id"]}')
+                except:
+                    pass
+                
+                # Группируем: склад → товар → количество
+                by_store = {}
                 for p in products:
-                    amt = p.get('amount')
-                    if not amt or float(amt) <= 0: continue
-                    pid, sid = str(p['productId']), str(p['storeId'])
-                    if pid not in by_product: by_product[pid] = {}
-                    by_product[pid][sid] = float(amt)
-                if by_product:
+                    amt = float(p.get('amount') or 0)
+                    if amt <= 0:
+                        continue
+                    sid = str(p['storeId'])
+                    pid = str(p['productId'])
+                    if sid not in by_store:
+                        by_store[sid] = {}
+                    by_store[sid][pid] = by_store[sid].get(pid, 0) + amt
+                
+                if by_store:
                     msgs.append(f"\n📦 <b>Остатки по складам:</b>")
-                    for pid, stores in sorted(by_product.items()):
-                        name = pnames.get(pid, f'Товар {pid}')
-                        total = sum(stores.values())
-                        details = ", ".join([f"{snames.get(sid, sid)}: {fmt_rub(amt)}" for sid, amt in stores.items()])
-                        msgs.append(f"   • {name}: {fmt_rub(total)} ({details})")
-        except Exception as e: msgs.append(f"\n📦 Остатки: ошибка — {str(e)[:80]}")
+                    
+                    for sid in sorted(by_store.keys()):
+                        store_name = store_names.get(sid, f'Склад {sid}')
+                        items = by_store[sid]
+                        
+                        # Разделяем на слэбы и штуки
+                        slabs = {}  # Товары-слэбы (камень)
+                        pieces = {} # Товары-штуки (клей и т.д.)
+                        
+                        for pid, qty in items.items():
+                            name = product_names_local.get(pid, f'Товар {pid}')
+                            if 'камень' in name.lower() or 'слэб' in name.lower() or 'акрил' in name.lower() or 'кварц' in name.lower():
+                                slabs[name] = qty
+                            else:
+                                pieces[name] = qty
+                        
+                        # Формируем строку для склада
+                        parts = []
+                        
+                        # Слэбы
+                        if slabs:
+                            total_slabs = sum(slabs.values())
+                            slab_detail = ", ".join([f"{name} {qty:.1f} слэб" if qty != 1 else f"{name} {qty:.1f} слэба" for name, qty in slabs.items()])
+                            parts.append(f"{total_slabs:.1f} слэбов ({slab_detail})")
+                        
+                        # Штуки
+                        if pieces:
+                            total_pieces = sum(pieces.values())
+                            piece_detail = ", ".join([f"{name} {qty:.1f} шт." for name, qty in pieces.items()])
+                            parts.append(f"{total_pieces:.1f} шт. ({piece_detail})")
+                        
+                        if parts:
+                            msgs.append(f"   • <b>{store_name}:</b> {'; '.join(parts)}")
+        except Exception as e:
+            msgs.append(f"\n📦 Остатки: ошибка — {str(e)[:80]}")
 
         # --- ИИ ---
         try:
