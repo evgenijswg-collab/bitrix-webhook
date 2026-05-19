@@ -304,7 +304,7 @@ def run_daily_audit():
 
         # --- ИИ ---
         try:
-            ai_report = get_ai_report(f"Напиши краткий вывод на русском (2-3 предложения): что хуже всего в этих данных, на что обратить внимание.\n\n{chr(10).join(msgs)[:800]}")
+            ai_report = get_ai_report(f"Напиши краткий вывод на русском (2-3 предложения): что хуже всего в этих данных, на что обратить внимание.\n\n{chr(10).join(msgs)[:500]}")
             if ai_report: msgs.append(f"\n\n🤖 <b>ИИ:</b>\n{ai_report}")
             else: msgs.append(f"\n\n⚠️ Все модели ИИ недоступны.")
         except Exception as e: msgs.append(f"\n\n⚠️ Ошибка ИИ: {str(e)[:200]}")
@@ -440,7 +440,7 @@ def run_monthly_audit():
 
         # --- ИИ ---
         try:
-            ai_report = get_ai_report(f"Напиши краткий вывод на русском (2-3 предложения) по итогам месяца: что хорошо, что плохо, какие тренды.\n\n{chr(10).join(msgs)[:800]}")
+            ai_report = get_ai_report(f"Напиши краткий вывод на русском (2-3 предложения) по итогам месяца: что хорошо, что плохо, какие тренды.\n\n{chr(10).join(msgs)[:500]}")
             if ai_report: msgs.append(f"\n\n🤖 <b>ИИ:</b>\n{ai_report}")
             else: msgs.append(f"\n\n⚠️ ИИ недоступен.")
         except Exception as e: msgs.append(f"\n\n⚠️ Ошибка ИИ: {str(e)[:200]}")
