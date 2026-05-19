@@ -272,7 +272,7 @@ def run_daily_audit():
                         msgs.append(f"   • {get_user_name(uid)}: {data['overdue']} просрочено")
         except Exception as e: msgs.append(f"\n📋 Задачи: ошибка — {str(e)[:80]}")
 
-                              # --- ОСТАТКИ ПО СКЛАДАМ ---
+                                      # --- ОСТАТКИ ПО СКЛАДАМ ---
         try:
             store_resp = bitrix_api("catalog.storeproduct.list.json")
             products = store_resp.get('result', {}).get('storeProducts', [])
@@ -312,15 +312,16 @@ def run_daily_audit():
                         store_name = store_names.get(sid, f'Склад {sid}')
                         items = by_store[sid]
                         
-                        # Разделяем на камни и клей
+                        # Разделяем на камни и остальное
                         slabs = {}
-                        glues = {}
+                        others = {}
                         for pid, qty in items.items():
                             name = product_names_local.get(pid, f'Товар {pid}')
-                            if any(w in name.lower() for w in ['камень', 'акрила', 'кварца']):
+                            # Камни — только то, что содержит "камень из"
+                            if 'камень из' in name.lower():
                                 slabs[name] = qty
                             else:
-                                glues[name] = qty
+                                others[name] = qty
                         
                         parts = []
                         
@@ -330,10 +331,10 @@ def run_daily_audit():
                             detail = ", ".join([f"{n} {q:.1f}" for n, q in slabs.items()])
                             parts.append(f"{total:.1f} слэбов ({detail})")
                         
-                        # Клей и прочее (штуки)
-                        if glues:
-                            total = sum(glues.values())
-                            detail = ", ".join([f"{n} {q:.1f}" for n, q in glues.items()])
+                        # Остальное (штуки)
+                        if others:
+                            total = sum(others.values())
+                            detail = ", ".join([f"{n} {q:.1f}" for n, q in others.items()])
                             parts.append(f"{total:.1f} шт. ({detail})")
                         
                         if parts:
