@@ -272,7 +272,7 @@ def run_daily_audit():
                         msgs.append(f"   • {get_user_name(uid)}: {data['overdue']} просрочено")
         except Exception as e: msgs.append(f"\n📋 Задачи: ошибка — {str(e)[:80]}")
 
-                       # --- ОСТАТКИ ПО СКЛАДАМ ---
+                              # --- ОСТАТКИ ПО СКЛАДАМ ---
         try:
             store_resp = bitrix_api("catalog.storeproduct.list.json")
             products = store_resp.get('result', {}).get('storeProducts', [])
@@ -294,7 +294,6 @@ def run_daily_audit():
                 except:
                     pass
                 
-                # Группируем: склад → товар → количество
                 by_store = {}
                 for p in products:
                     amt = float(p.get('amount') or 0)
@@ -313,19 +312,32 @@ def run_daily_audit():
                         store_name = store_names.get(sid, f'Склад {sid}')
                         items = by_store[sid]
                         
-                        # Каждый товар отдельно, без смешивания категорий
-                        item_lines = []
-                        for pid, qty in sorted(items.items(), key=lambda x: x[1], reverse=True):
+                        # Разделяем на камни и клей
+                        slabs = {}
+                        glues = {}
+                        for pid, qty in items.items():
                             name = product_names_local.get(pid, f'Товар {pid}')
-                            # Определяем, слэб или штука
-                            if 'камень' in name.lower() or 'слэб' in name.lower() or 'акрил' in name.lower() or 'кварц' in name.lower():
-                                label = "слэб" if qty == 1 else "слэба" if 1 < qty < 5 else "слэбов"
-                                item_lines.append(f"{name}: {qty:.1f} {label}")
+                            if any(w in name.lower() for w in ['камень', 'акрила', 'кварца']):
+                                slabs[name] = qty
                             else:
-                                item_lines.append(f"{name}: {qty:.1f} шт.")
+                                glues[name] = qty
                         
-                        if item_lines:
-                            msgs.append(f"   • <b>{store_name}:</b> {', '.join(item_lines)}")
+                        parts = []
+                        
+                        # Камни (слэбы)
+                        if slabs:
+                            total = sum(slabs.values())
+                            detail = ", ".join([f"{n} {q:.1f}" for n, q in slabs.items()])
+                            parts.append(f"{total:.1f} слэбов ({detail})")
+                        
+                        # Клей и прочее (штуки)
+                        if glues:
+                            total = sum(glues.values())
+                            detail = ", ".join([f"{n} {q:.1f}" for n, q in glues.items()])
+                            parts.append(f"{total:.1f} шт. ({detail})")
+                        
+                        if parts:
+                            msgs.append(f"   • <b>{store_name}:</b> {'; '.join(parts)}")
         except Exception as e:
             msgs.append(f"\n📦 Остатки: ошибка — {str(e)[:80]}")
 
