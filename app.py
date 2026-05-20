@@ -134,14 +134,19 @@ def process_contract_background(deal_id):
         time.sleep(2)
         deal_resp = bitrix_api("crm.deal.get.json", {"id": int(deal_id)})
         cn = deal_resp.get('result', {}).get(CONTRACT_NUMBER_FIELD, '')
+        stage = deal_resp.get('result', {}).get('STAGE_ID', '')
+        
         bp_resp = bitrix_api("bizproc.workflow.instances.json", {
             "SELECT": ["ID", "STATE"],
             "FILTER": {"DOCUMENT_ID": f"crm_CCrmDocumentDeal_{deal_id}", "STATE": "running"}})
+        
         if cn and len(bp_resp.get('result', [])) == 0:
-            bitrix_api("bizproc.workflow.start.json", {
-                "TEMPLATE_ID": BP_TEMPLATE_ID,
-                "DOCUMENT_ID": ["crm", "CCrmDocumentDeal", int(deal_id)],
-                "PARAMETERS": {"contractNumber": cn}})
+            # Проверяем стадию: только "Подписание договора" (EXECUTING)
+            if stage == "EXECUTING":
+                bitrix_api("bizproc.workflow.start.json", {
+                    "TEMPLATE_ID": BP_TEMPLATE_ID,
+                    "DOCUMENT_ID": ["crm", "CCrmDocumentDeal", int(deal_id)],
+                    "PARAMETERS": {"contractNumber": cn}})
             break
 
 @app.route('/contract', methods=['POST'])
